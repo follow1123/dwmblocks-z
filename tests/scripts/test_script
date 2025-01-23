@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# echo aaaa
+echo $BLOCK_BUTTON
