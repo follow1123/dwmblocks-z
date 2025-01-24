@@ -17,15 +17,16 @@ const unix = @cImport({
 const Block = @import("Block.zig");
 const Button = Block.Button;
 const BarStatus = @import("BarStatus.zig");
+const Timer = @import("Timer.zig");
 
 const config = @import("config.zig");
 
 var status_cuntinue: bool = true;
 
-fn gcd(a: i32, b: i32) i32 {
-    var temp: i32 = undefined;
-    var at: i32 = a;
-    var bt: i32 = b;
+fn gcd(a: u16, b: u16) u16 {
+    var temp: u16 = undefined;
+    var at: u16 = a;
+    var bt: u16 = b;
     while (bt > 0) {
         temp = @mod(at, bt);
         at = bt;
@@ -48,8 +49,8 @@ pub fn main() !void {
     log.debug("SIGRTMIN: {}, SIGRTMAX: {}", .{ SIGRTMIN, SIGRTMAX });
 
     const block_count = config.blocks.len;
-    var max_interval: i32 = undefined;
-    var timer_tick: i32 = undefined;
+    var max_interval: u16 = 0;
+    var timer_tick: u16 = 0;
 
     var sig_fd: posix.fd_t = undefined;
     var blocks: [block_count]Block = undefined;
@@ -58,7 +59,7 @@ pub fn main() !void {
     Block.staticInit(alloc);
     defer Block.staticDeinit(alloc);
     inline for (config.blocks, 0..) |b, i| {
-        const path, const interval, const signum = b;
+        const path, const interval: u16, const signum: u8 = b;
         // Calculate the max interval and tick size for the timer
         if (interval > 0) {
             max_interval = @max(interval, max_interval);
@@ -73,6 +74,7 @@ pub fn main() !void {
     var status = try BarStatus.init(alloc, &blocks);
     defer status.deinit();
 
+    var timer = Timer.init(max_interval, timer_tick, &status, "execBlocks");
     const epoll_fd = try posix.epoll_create1(0);
     defer posix.close(epoll_fd);
 
@@ -85,7 +87,7 @@ pub fn main() !void {
     _ = signal.sigemptyset(&handled_sig);
 
     _ = signal.sigaddset(&handled_sig, SIG.USR1);
-    _ = signal.sigaddset(&handled_sig, SIG.ALRM);
+    _ = signal.sigaddset(&handled_sig, timer.sig);
 
     for (&blocks, 0..) |*block, i| {
         log.debug("add block {} to sigset, next realtime signal is: {}", .{ i, SIGRTMIN + block.signum });
@@ -118,9 +120,8 @@ pub fn main() !void {
     try posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, sig_fd, &event);
 
     // Update all blocks initially
-    try posix.raise(SIG.ALRM);
+    timer.start();
     var events: [block_count + 1]linux.epoll_event = undefined;
-    var timer: i32 = 0;
     while (status_cuntinue) {
         // log.debug("waiting...", .{});
         const evt_count = posix.epoll_wait(epoll_fd, &events, 500);
@@ -132,14 +133,7 @@ pub fn main() !void {
                     _ = unix.read(sig_fd, &info, @sizeOf(linux.signalfd_siginfo));
                     switch (info.signo) {
                         SIG.ALRM => {
-                            // log.debug("handle signal alrm...", .{});
-                            // Schedule the next timer event and execute blocks
-                            _ = std.c.alarm(@intCast(timer_tick));
-                            try status.execBlocks(timer);
-
-                            log.debug("timer: {}", .{timer});
-                            // Wrap `timer` to the interval [1, `maxInterval`]
-                            timer = @mod(timer + timer_tick - 1, max_interval) + 1;
+                            timer.trigger();
                             break;
                         },
                         SIG.USR1 => {
@@ -177,6 +171,7 @@ pub fn main() !void {
 }
 
 test "app test" {
-    _ = Block;
+    // _ = Block;
     // _ = BarStatus;
+    _ = Timer;
 }
