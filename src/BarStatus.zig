@@ -34,10 +34,11 @@ pub fn updateStatus(self: *BarStatus) !bool {
     try self.previous.appendSlice(self.current.items);
 
     self.current.clearRetainingCapacity();
-    for (self.blocks) |block| {
-        if (block.output.items.len == 0) continue;
+    for (self.blocks) |*block| {
+        const output = block.getOutput();
+        if (output.len == 0) continue;
         try self.current.append(' ');
-        try self.current.appendSlice(block.output.items);
+        try self.current.appendSlice(output);
     }
 
     return std.mem.eql(u8, self.previous.items, self.current.items);

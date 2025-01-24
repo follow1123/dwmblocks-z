@@ -1,4 +1,5 @@
 pub const DATA_DIR_NAME = "dwmblocks";
+pub const MAX_OUTPUT = 60;
 
 pub const blocks = .{
     .{ "icon.sh", 0, 1 },

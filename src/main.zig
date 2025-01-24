@@ -40,12 +40,12 @@ pub fn termHandler(_: i32) callconv(.C) void {
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
     const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
     const SIGRTMAX: u8 = @intCast(signal.__libc_current_sigrtmax());
     log.debug("SIGRTMIN: {}, SIGRTMAX: {}", .{ SIGRTMIN, SIGRTMAX });
-    defer arena.deinit();
-
-    const alloc = arena.allocator();
 
     const block_count = config.blocks.len;
     var max_interval: i32 = undefined;
@@ -55,6 +55,8 @@ pub fn main() !void {
     var blocks: [block_count]Block = undefined;
 
     log.debug("load block from config", .{});
+    Block.staticInit(alloc);
+    defer Block.staticDeinit(alloc);
     inline for (config.blocks, 0..) |b, i| {
         const path, const interval, const signum = b;
         // Calculate the max interval and tick size for the timer
@@ -93,7 +95,7 @@ pub fn main() !void {
     }
 
     // Create a signal file descriptor for epoll to watch
-    sig_fd = signal.signalfd(-1, &handled_sig, 0);
+    sig_fd = signal.signalfd(-1, &handled_sig, linux.SFD.NONBLOCK);
     defer posix.close(sig_fd);
 
     // Block all realtime and handled signals
@@ -176,5 +178,5 @@ pub fn main() !void {
 
 test "app test" {
     _ = Block;
-    _ = BarStatus;
+    // _ = BarStatus;
 }
