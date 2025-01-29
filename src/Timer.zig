@@ -10,16 +10,24 @@ const c = std.c;
 
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
+const SigEvent = @import("Multiplexer.zig").SigEvent;
 
-const sig_util = struct {
-    pub fn raise(sig: u8) void {
+const SigUtil = struct {
+    raise: *const fn (sig: u8) void,
+    alarm: *const fn (timer_tick: u16) void,
+    pub fn defalut() SigUtil {
+        return .{
+            .raise = SigUtil.raise_impl,
+            .alarm = SigUtil.alarm_impl,
+        };
+    }
+    fn raise_impl(sig: u8) void {
         posix.raise(sig) catch |err| {
             log.err("cannot send signal alrm, error: {s}", .{@errorName(err)});
             std.process.exit(1);
         };
     }
-
-    pub fn alarm(timer_tick: u16) void {
+    fn alarm_impl(timer_tick: u16) void {
         _ = c.alarm(@intCast(timer_tick));
     }
 };
@@ -30,8 +38,7 @@ time: u16 = 0,
 sig: u8 = SIG.ALRM,
 ptr: *anyopaque,
 on_trigger: *const fn (ptr: *anyopaque, time: u16) anyerror!void,
-raise: *const fn (sig: u8) void,
-alarm: *const fn (timer_tick: u16) void,
+sig_util: SigUtil,
 
 pub fn init(max_interval: u16, timer_tick: u16, ptr: anytype, comptime method: []const u8) Timer {
     const T = @TypeOf(ptr);
@@ -43,18 +50,11 @@ pub fn init(max_interval: u16, timer_tick: u16, ptr: anytype, comptime method: [
         }
     };
 
-    return .{
-        .max_interval = max_interval,
-        .timer_tick = timer_tick,
-        .ptr = ptr,
-        .on_trigger = gen.on_trigger,
-        .raise = sig_util.raise,
-        .alarm = sig_util.alarm,
-    };
+    return .{ .max_interval = max_interval, .timer_tick = timer_tick, .ptr = ptr, .on_trigger = gen.on_trigger, .sig_util = SigUtil.defalut() };
 }
 
 pub fn start(self: Timer) void {
-    self.raise(self.sig);
+    self.sig_util.raise(self.sig);
 }
 
 fn nextTime(self: *Timer) void {
@@ -63,10 +63,22 @@ fn nextTime(self: *Timer) void {
 }
 
 pub fn trigger(self: *Timer) void {
-    self.alarm(self.timer_tick);
+    self.sig_util.alarm(self.timer_tick);
 
     self.on_trigger(self.ptr, self.time) catch {};
     self.nextTime();
+}
+
+pub fn getSig(self: *Timer) u8 {
+    return self.sig;
+}
+
+pub fn onSigTrigger(self: *Timer, _: i32) void {
+    self.trigger();
+}
+
+pub fn getSigEvent(self: *Timer) SigEvent {
+    return SigEvent.init(self);
 }
 
 pub fn main() !void {
@@ -129,8 +141,10 @@ test "execute timer" {
     const timer_tick = 1;
     const max_inteval = 3;
     var timer = Timer.init(max_inteval, timer_tick, &st, "on_trigger");
-    timer.raise = sig_test_util.raise;
-    timer.alarm = sig_test_util.alarm;
+    timer.sig_util = .{
+        .raise = sig_test_util.raise,
+        .alarm = sig_test_util.alarm,
+    };
     timer.start();
     try testing.expectEqual(0, timer.time);
     timer.trigger();

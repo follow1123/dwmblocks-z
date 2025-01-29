@@ -9,6 +9,8 @@ const linux = std.os.linux;
 
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
+const Event = @import("Multiplexer.zig").Event;
+const SigEvent = @import("Multiplexer.zig").SigEvent;
 
 var static_data: struct { env_map: ScriptEnvMap, data_home: [:0]u8 } = undefined;
 
@@ -205,6 +207,40 @@ pub fn updateBlock(self: *Block) !void {
 
     self.output_len = try posix.read(self.pipe[0], self.output);
     if (self.output[self.output_len - 1] == '\n') self.output_len -= 1;
+}
+
+pub fn getFd(self: *Block) posix.fd_t {
+    return self.pipe[0];
+}
+
+pub fn onTrigger(self: *Block) void {
+    self.updateBlock() catch |err| {
+        log.err("execute script has no output, error: {s}", .{@errorName(err)});
+        return;
+    };
+}
+
+pub fn getEvent(self: *Block) Event {
+    return Event.init(self);
+}
+
+pub fn getSig(self: *Block) u8 {
+    return self.signum;
+}
+
+pub fn onSigTrigger(self: *Block, data: i32) void {
+    const button = if (Button.fromInt(@intCast(data))) |btn| btn else |err| e: {
+        log.err("parse button error: {s}", .{@errorName(err)});
+        break :e null;
+    };
+    self.execBlock(button) catch |err| {
+        log.err("cannot execute block script, error: {s}", .{@errorName(err)});
+        return;
+    };
+}
+
+pub fn getSigEvent(self: *Block) SigEvent {
+    return SigEvent.init(self);
 }
 
 test "exec" {

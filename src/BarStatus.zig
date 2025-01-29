@@ -4,11 +4,16 @@ const std = @import("std");
 const log = std.log;
 const Allocator = std.mem.Allocator;
 
+const posix = std.posix;
+const SIG = posix.SIG;
+
 const Block = @import("Block.zig");
+const SigEvent = @import("Multiplexer.zig").SigEvent;
 const X11 = @import("X11.zig");
 
 alloc: Allocator,
 blocks: []Block,
+sig: u8 = SIG.USR1,
 x11: X11,
 current: std.ArrayList(u8),
 previous: std.ArrayList(u8),
@@ -45,6 +50,7 @@ pub fn updateStatus(self: *BarStatus) !bool {
 }
 
 pub fn execBlocks(self: *BarStatus, time: i32) !void {
+    log.debug("execute block by time", .{});
     for (self.blocks) |*block| {
         if (time == 0 or (block.interval != 0 and @mod(time, block.interval) == 0)) {
             try block.execBlock(null);
@@ -53,12 +59,30 @@ pub fn execBlocks(self: *BarStatus, time: i32) !void {
 }
 
 pub fn writeStatus(self: *BarStatus) !void {
-    if (try self.updateStatus()) return;
+    if (try self.updateStatus()) {
+        log.debug("nothing to update", .{});
+        return;
+    }
     log.debug("{s}", .{self.current.items});
     // const status = try self.alloc.alloc(u8, self.current.items.len);
     // defer self.alloc.free(status);
     // std.mem.copyForwards(u8, status, self.current.items);
     // self.x11.setRoot(status.ptr);
+}
+
+pub fn getSig(self: *BarStatus) u8 {
+    return self.sig;
+}
+
+pub fn onSigTrigger(self: *BarStatus, _: i32) void {
+    self.execBlocks(0) catch |err| {
+        log.err("cannot execute blocks, error: {s}", .{@errorName(err)});
+        return;
+    };
+}
+
+pub fn getSigEvent(self: *BarStatus) SigEvent {
+    return SigEvent.init(self);
 }
 
 test "init bar status" {
