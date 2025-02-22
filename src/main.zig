@@ -17,18 +17,6 @@ const config = @import("config.zig");
 
 var status_cuntinue: bool = true;
 
-fn gcd(a: u16, b: u16) u16 {
-    var temp: u16 = undefined;
-    var at: u16 = a;
-    var bt: u16 = b;
-    while (bt > 0) {
-        temp = @mod(at, bt);
-        at = bt;
-        bt = temp;
-    }
-    return at;
-}
-
 pub fn termHandler(_: i32) callconv(.C) void {
     status_cuntinue = false;
 }
@@ -52,7 +40,7 @@ pub fn main() !void {
         // Calculate the max interval and tick size for the timer
         if (interval > 0) {
             max_interval = @max(interval, max_interval);
-            timer_tick = gcd(interval, timer_tick);
+            timer_tick = std.math.gcd(interval, timer_tick);
         }
         blocks[i] = try Block.init(alloc, path, interval, signum);
         log.debug("script path: {s}, \tinterval: {}, \tsignum: {}", .{ blocks[i].script, blocks[i].interval, blocks[i].signum });
