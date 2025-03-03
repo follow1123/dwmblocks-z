@@ -138,7 +138,6 @@ pub fn deinit(self: *Multiplexer) void {
 pub fn registerEvent(self: *Multiplexer, e: *Event) void {
     var event = linux.epoll_event{ .events = linux.EPOLL.IN, .data = .{ .ptr = @intFromPtr(e) } };
 
-    log.debug("register a fd: {}", .{e.getFd()});
     posix.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, e.getFd(), &event) catch |err| {
         log.err("cannot register event to epoll, error: {s}", .{@errorName(err)});
         std.process.exit(1);

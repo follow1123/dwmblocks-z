@@ -5,30 +5,50 @@ const log = std.log;
 
 const posix = std.posix;
 const SIG = posix.SIG;
-const linux = std.os.linux;
 const c = std.c;
 
 const Allocator = std.mem.Allocator;
-const config = @import("config.zig");
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 
-const SigUtil = struct {
-    raise: *const fn (sig: u8) void,
-    alarm: *const fn (timer_tick: u16) void,
-    pub fn defalut() SigUtil {
-        return .{
-            .raise = SigUtil.raise_impl,
-            .alarm = SigUtil.alarm_impl,
-        };
+pub const TriggerEvent = struct {
+    ptr: *anyopaque,
+    onTriggerFn: *const fn (ptr: *anyopaque, time: u16) void,
+
+    pub fn onTrigger(self: TriggerEvent, time: u16) void {
+        self.onTriggerFn(self.ptr, time);
     }
-    fn raise_impl(sig: u8) void {
+};
+
+const SigUtil = struct {
+    /// 程序是否运行的标识
+    var running: bool = true;
+
+    /// 给自己发送一个信号
+    pub fn raise(sig: u8) void {
         posix.raise(sig) catch |err| {
             log.err("cannot send signal alrm, error: {s}", .{@errorName(err)});
             std.process.exit(1);
         };
     }
-    fn alarm_impl(timer_tick: u16) void {
+
+    /// 指定时间后给自己发送一个 ALRM(14) 信号
+    pub fn alarm(timer_tick: u16) void {
         _ = c.alarm(@intCast(timer_tick));
+    }
+
+    /// 阻塞停止信号
+    pub fn blockStopSignal() void {
+        var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = 0, .handler = .{ .handler = SigUtil.termHandler } };
+
+        // 处理结束信号
+        posix.sigaction(SIG.TERM, &sa, null) catch @panic("handle sigterm sigaction error");
+        posix.sigaction(SIG.INT, &sa, null) catch @panic("handle sigint sigaction error");
+    }
+
+    /// 捕获到 INT(2) 或 TERM(15) 信号设置结束标识
+    fn termHandler(_: i32) callconv(.C) void {
+        SigUtil.running = false;
+        log.debug("handle exit signal", .{});
     }
 };
 
@@ -36,25 +56,19 @@ max_interval: u16,
 timer_tick: u16,
 time: u16 = 0,
 sig: u8 = SIG.ALRM,
-ptr: *anyopaque,
-on_trigger: *const fn (ptr: *anyopaque, time: u16) anyerror!void,
-sig_util: SigUtil,
+event: *TriggerEvent,
 
-pub fn init(max_interval: u16, timer_tick: u16, ptr: anytype, comptime method: []const u8) Timer {
-    const T = @TypeOf(ptr);
-    const ptr_info = @typeInfo(T);
-    const gen = struct {
-        pub fn on_trigger(pointer: *anyopaque, time: u16) anyerror!void {
-            const self: T = @ptrCast(@alignCast(pointer));
-            return @field(ptr_info.Pointer.child, method)(self, time);
-        }
-    };
-
-    return .{ .max_interval = max_interval, .timer_tick = timer_tick, .ptr = ptr, .on_trigger = gen.on_trigger, .sig_util = SigUtil.defalut() };
+pub fn init(max_interval: u16, timer_tick: u16, event: *TriggerEvent) Timer {
+    return .{ .max_interval = max_interval, .timer_tick = timer_tick, .event = event };
 }
 
 pub fn start(self: Timer) void {
-    self.sig_util.raise(self.sig);
+    SigUtil.blockStopSignal();
+    SigUtil.raise(self.sig);
+}
+
+pub fn isRunning(_: Timer) bool {
+    return SigUtil.running;
 }
 
 fn nextTime(self: *Timer) void {
@@ -63,9 +77,9 @@ fn nextTime(self: *Timer) void {
 }
 
 pub fn trigger(self: *Timer) void {
-    self.sig_util.alarm(self.timer_tick);
+    SigUtil.alarm(self.timer_tick);
 
-    self.on_trigger(self.ptr, self.time) catch {};
+    self.event.onTrigger(self.time);
     self.nextTime();
 }
 
@@ -88,80 +102,31 @@ pub fn sigEvent(ctx: *Timer) SigEvent {
     };
 }
 
-pub fn main() !void {
-    const ST = struct {
-        pub fn on_trigger(self: *@This(), time: u16) void {
-            _ = self;
-            log.debug("run some code with time: {}", .{time});
-        }
-    };
-
-    var st = ST{};
-
-    var timer = Timer.init(5, 1, &st, "on_trigger");
-    const sig_handler = struct {
-        pub var tmr: *Timer = undefined;
-        pub fn handle(signal: i32) callconv(.C) void {
-            _ = signal;
-            tmr.trigger();
-        }
-    };
-
-    sig_handler.tmr = &timer;
-
-    var sa = posix.Sigaction{
-        .handler = .{ .handler = sig_handler.handle },
-        .flags = 0,
-        .mask = posix.empty_sigset,
-    };
-
-    try posix.sigaction(SIG.ALRM, &sa, null);
-    timer.start();
-
-    while (true) {
-        log.debug("waiting...", .{});
-        std.time.sleep(100 * std.time.ns_per_ms);
-    }
-}
-
 test "execute timer" {
     const testing = std.testing;
 
-    const ST = struct {
-        pub fn on_trigger(self: *@This(), time: u16) void {
-            _ = self;
-            log.debug("run some code with time: {}", .{time});
-        }
-    };
-    const sig_test_util = struct {
-        pub fn raise(sig: u8) void {
-            _ = sig;
-        }
-
-        pub fn alarm(timer_tick: u16) void {
-            _ = timer_tick;
-        }
-    };
-
-    var st = ST{};
-
     const timer_tick = 1;
     const max_inteval = 3;
-    var timer = Timer.init(max_inteval, timer_tick, &st, "on_trigger");
-    timer.sig_util = .{
-        .raise = sig_test_util.raise,
-        .alarm = sig_test_util.alarm,
+
+    const gen = struct {
+        pub fn onTrigger(_: *anyopaque, _: u16) void {}
     };
-    timer.start();
+    var g = gen{};
+    var evt = TriggerEvent{
+        .ptr = &g,
+        .onTriggerFn = gen.onTrigger,
+    };
+
+    var timer = Timer.init(max_inteval, timer_tick, &evt);
     try testing.expectEqual(0, timer.time);
-    timer.trigger();
+    timer.nextTime();
     try testing.expectEqual(1, timer.time);
-    timer.trigger();
+    timer.nextTime();
     try testing.expectEqual(2, timer.time);
-    timer.trigger();
+    timer.nextTime();
     try testing.expectEqual(3, timer.time);
-    timer.trigger();
+    timer.nextTime();
     try testing.expectEqual(1, timer.time);
-    timer.trigger();
+    timer.nextTime();
     try testing.expectEqual(2, timer.time);
 }

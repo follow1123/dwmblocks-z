@@ -5,22 +5,12 @@ const posix = std.posix;
 const SIG = posix.SIG;
 
 const Block = @import("Block.zig");
-const Button = Block.Button;
 const BarStatus = @import("BarStatus.zig");
 const Timer = @import("Timer.zig");
 const Multiplexer = @import("Multiplexer.zig");
-const SigEvent = @import("Multiplexer.zig").SigEvent;
-const Event = @import("Multiplexer.zig").Event;
 const SigEventCombinator = @import("Multiplexer.zig").SigEventCombinator;
 
 const config = @import("config.zig");
-
-var status_cuntinue: bool = true;
-
-pub fn termHandler(_: i32) callconv(.C) void {
-    log.info("handle exit signal", .{});
-    status_cuntinue = false;
-}
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -59,33 +49,29 @@ pub fn main() !void {
 
     sig_event_combinator.add(status.sigEvent());
 
-    var timer = Timer.init(max_interval, timer_tick, &status, "execBlocks");
+    var trigger_event = status.triggerEvent();
+    var timer = Timer.init(max_interval, timer_tick, &trigger_event);
     sig_event_combinator.add(timer.sigEvent());
 
     inline for (&blocks) |*block| {
         var block_event = block.event();
         multiplexer.registerEvent(&block_event);
+        log.debug("register block: {s}", .{block.script});
         if (block.signum > 0) sig_event_combinator.add(block.sigEvent());
     }
 
-    var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = 0, .handler = .{ .handler = termHandler } };
-
-    // Handle termination signals
-    try posix.sigaction(SIG.TERM, &sa, null);
-    try posix.sigaction(SIG.INT, &sa, null);
-
-    // Avoid zombie subprocesses
-    sa.flags = posix.SA.NOCLDWAIT;
-    sa.handler.handler = SIG.DFL;
+    // 避免僵尸子进程
+    var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = posix.SA.NOCLDWAIT, .handler = .{ .handler = SIG.DFL } };
     try posix.sigaction(SIG.CHLD, &sa, null);
 
     var sig_event = sig_event_combinator.getEvent();
     multiplexer.registerEvent(&sig_event);
+    log.debug("register all signal", .{});
 
     // Update all blocks initially
     timer.start();
 
-    while (status_cuntinue) {
+    while (timer.isRunning()) {
         const evt_count = multiplexer.waitEvents();
         if (evt_count != -1) try status.writeStatus();
     }
@@ -94,8 +80,8 @@ pub fn main() !void {
 }
 
 test "app test" {
-    _ = Block;
+    // _ = Block;
     // _ = BarStatus;
-    // _ = Timer;
+    _ = Timer;
     // _ = Multiplexer;
 }

@@ -9,6 +9,7 @@ const SIG = posix.SIG;
 
 const Block = @import("Block.zig");
 const SigEvent = @import("Multiplexer.zig").SigEvent;
+const TriggerEvent = @import("Timer.zig").TriggerEvent;
 const X11 = @import("X11.zig");
 
 alloc: Allocator,
@@ -90,6 +91,23 @@ pub fn sigEvent(ctx: *BarStatus) SigEvent {
         .ptr = ctx,
         .getSigFn = gen.getSig,
         .onSigTriggerFn = gen.onSigTrigger,
+    };
+}
+
+pub fn triggerEvent(ctx: *BarStatus) TriggerEvent {
+    const gen = struct {
+        pub fn onTrigger(ptr: *anyopaque, time: u16) void {
+            const self: *BarStatus = @ptrCast(@alignCast(ptr));
+            self.execBlocks(time) catch |err| {
+                log.err("cannot execute blocks, error: {s}", .{@errorName(err)});
+                return;
+            };
+        }
+    };
+
+    return .{
+        .ptr = ctx,
+        .onTriggerFn = gen.onTrigger,
     };
 }
 
