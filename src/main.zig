@@ -11,13 +11,14 @@ const Timer = @import("Timer.zig");
 const Multiplexer = @import("Multiplexer.zig");
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 const Event = @import("Multiplexer.zig").Event;
-const SigEventComposition = @import("Multiplexer.zig").SigEventComposition;
+const SigEventCombinator = @import("Multiplexer.zig").SigEventCombinator;
 
 const config = @import("config.zig");
 
 var status_cuntinue: bool = true;
 
 pub fn termHandler(_: i32) callconv(.C) void {
+    log.info("handle exit signal", .{});
     status_cuntinue = false;
 }
 
@@ -43,45 +44,43 @@ pub fn main() !void {
             timer_tick = std.math.gcd(interval, timer_tick);
         }
         blocks[i] = try Block.init(alloc, path, interval, signum);
-        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}", .{ blocks[i].script, blocks[i].interval, blocks[i].signum });
+        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}, pipe: ({}, {})", .{ blocks[i].script, blocks[i].interval, blocks[i].signum, blocks[i].pipe[0], blocks[i].pipe[1] });
     }
     defer for (&blocks) |*block| block.deinit();
     log.debug("max_interval: {}, timer_tick: {}", .{ max_interval, timer_tick });
-    var sig_event_list = std.ArrayList(SigEvent).init(alloc);
+    var sig_event_combinator = SigEventCombinator.init(alloc);
+    defer sig_event_combinator.deinit();
 
     var multiplexer = Multiplexer.init();
     defer multiplexer.deinit();
 
     var status = try BarStatus.init(alloc, &blocks);
     defer status.deinit();
-    try sig_event_list.append(status.getSigEvent());
+
+    sig_event_combinator.add(status.sigEvent());
 
     var timer = Timer.init(max_interval, timer_tick, &status, "execBlocks");
-    try sig_event_list.append(timer.getSigEvent());
+    sig_event_combinator.add(timer.sigEvent());
 
-    for (&blocks) |*block| {
-        // TODO 注册 block 后会导致脚本写管道被无限触发
-        // var block_event = block.getEvent();
-        // multiplexer.registerEvent(&block_event);
-        if (block.signum > 0) try sig_event_list.append(block.getSigEvent());
+    inline for (&blocks) |*block| {
+        var block_event = block.event();
+        multiplexer.registerEvent(&block_event);
+        if (block.signum > 0) sig_event_combinator.add(block.sigEvent());
     }
 
     var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = 0, .handler = .{ .handler = termHandler } };
 
-    // TODO 无法处理结束信号
     // Handle termination signals
-    try posix.sigaction(SIG.INT, &sa, null);
     try posix.sigaction(SIG.TERM, &sa, null);
+    try posix.sigaction(SIG.INT, &sa, null);
 
     // Avoid zombie subprocesses
     sa.flags = posix.SA.NOCLDWAIT;
     sa.handler.handler = SIG.DFL;
     try posix.sigaction(SIG.CHLD, &sa, null);
 
-    var sec = SigEventComposition.init(sig_event_list.items);
-    defer sec.deinit();
-    var compose_event = sec.composeEvent();
-    multiplexer.registerEvent(&compose_event);
+    var sig_event = sig_event_combinator.getEvent();
+    multiplexer.registerEvent(&sig_event);
 
     // Update all blocks initially
     timer.start();
@@ -95,8 +94,8 @@ pub fn main() !void {
 }
 
 test "app test" {
-    // _ = Block;
+    _ = Block;
     // _ = BarStatus;
     // _ = Timer;
-    _ = Multiplexer;
+    // _ = Multiplexer;
 }

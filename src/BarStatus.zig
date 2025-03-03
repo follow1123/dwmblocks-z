@@ -45,6 +45,7 @@ pub fn updateStatus(self: *BarStatus) !bool {
         try self.current.append(' ');
         try self.current.appendSlice(output);
     }
+    // log.debug("current status: {s}", .{self.current.items});
 
     return std.mem.eql(u8, self.previous.items, self.current.items);
 }
@@ -70,19 +71,26 @@ pub fn writeStatus(self: *BarStatus) !void {
     // self.x11.setRoot(status.ptr);
 }
 
-pub fn getSig(self: *BarStatus) u8 {
-    return self.sig;
-}
-
-pub fn onSigTrigger(self: *BarStatus, _: i32) void {
-    self.execBlocks(0) catch |err| {
-        log.err("cannot execute blocks, error: {s}", .{@errorName(err)});
-        return;
+pub fn sigEvent(ctx: *BarStatus) SigEvent {
+    const gen = struct {
+        pub fn getSig(ptr: *anyopaque) u8 {
+            const self: *BarStatus = @ptrCast(@alignCast(ptr));
+            return self.sig;
+        }
+        pub fn onSigTrigger(ptr: *anyopaque, _: i32) void {
+            const self: *BarStatus = @ptrCast(@alignCast(ptr));
+            self.execBlocks(0) catch |err| {
+                log.err("cannot execute blocks, error: {s}", .{@errorName(err)});
+                return;
+            };
+        }
     };
-}
 
-pub fn getSigEvent(self: *BarStatus) SigEvent {
-    return SigEvent.init(self);
+    return .{
+        .ptr = ctx,
+        .getSigFn = gen.getSig,
+        .onSigTriggerFn = gen.onSigTrigger,
+    };
 }
 
 test "init bar status" {

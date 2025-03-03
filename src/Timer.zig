@@ -69,16 +69,23 @@ pub fn trigger(self: *Timer) void {
     self.nextTime();
 }
 
-pub fn getSig(self: *Timer) u8 {
-    return self.sig;
-}
+pub fn sigEvent(ctx: *Timer) SigEvent {
+    const gen = struct {
+        pub fn getSig(ptr: *anyopaque) u8 {
+            const self: *Timer = @ptrCast(@alignCast(ptr));
+            return self.sig;
+        }
+        pub fn onSigTrigger(ptr: *anyopaque, _: i32) void {
+            const self: *Timer = @ptrCast(@alignCast(ptr));
+            self.trigger();
+        }
+    };
 
-pub fn onSigTrigger(self: *Timer, _: i32) void {
-    self.trigger();
-}
-
-pub fn getSigEvent(self: *Timer) SigEvent {
-    return SigEvent.init(self);
+    return .{
+        .ptr = ctx,
+        .getSigFn = gen.getSig,
+        .onSigTriggerFn = gen.onSigTrigger,
+    };
 }
 
 pub fn main() !void {

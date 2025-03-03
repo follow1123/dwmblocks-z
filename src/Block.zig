@@ -7,14 +7,16 @@ const posix = std.posix;
 const SIG = posix.SIG;
 const linux = std.os.linux;
 
+const signal = @cImport({
+    @cInclude("signal.h");
+});
+
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
 const Event = @import("Multiplexer.zig").Event;
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 
 var static_data: struct { env_map: ScriptEnvMap, data_home: [:0]u8 } = undefined;
-
-pub const ButtonError = error{InvalidNumberASCII};
 
 pub const Button = enum(u8) {
     left = '1',
@@ -25,8 +27,8 @@ pub const Button = enum(u8) {
     ctrlLeft = '6',
     ctrlRight = '7',
 
-    pub fn fromInt(i: u8) ButtonError!Button {
-        if (i < 1 or i > 7) return ButtonError.InvalidNumberASCII;
+    pub fn fromInt(i: u8) ?Button {
+        if (i < 1 or i > 7) return null;
         return @enumFromInt(i + 48);
     }
 
@@ -202,45 +204,56 @@ pub fn getOutput(self: *Block) []u8 {
     return self.output[0..self.output_len];
 }
 
-pub fn updateBlock(self: *Block) !void {
+pub fn updateBlock(self: *Block) void {
     self.lock = false;
 
-    self.output_len = try posix.read(self.pipe[0], self.output);
-    if (self.output[self.output_len - 1] == '\n') self.output_len -= 1;
-}
-
-pub fn getFd(self: *Block) posix.fd_t {
-    return self.pipe[0];
-}
-
-pub fn onTrigger(self: *Block) void {
-    self.updateBlock() catch |err| {
+    self.output_len = posix.read(self.pipe[0], self.output) catch |err| {
         log.err("execute script has no output, error: {s}", .{@errorName(err)});
         return;
     };
+    if (self.output_len > 0 and self.output[self.output_len - 1] == '\n') self.output_len -= 1;
 }
 
-pub fn getEvent(self: *Block) Event {
-    return Event.init(self);
-}
-
-pub fn getSig(self: *Block) u8 {
-    return self.signum;
-}
-
-pub fn onSigTrigger(self: *Block, data: i32) void {
-    const button = if (Button.fromInt(@intCast(data))) |btn| btn else |err| e: {
-        log.err("parse button error: {s}", .{@errorName(err)});
-        break :e null;
+pub fn event(ctx: *Block) Event {
+    const gen = struct {
+        pub fn getFd(ptr: *anyopaque) posix.fd_t {
+            const self: *Block = @ptrCast(@alignCast(ptr));
+            return self.pipe[0];
+        }
+        pub fn onTrigger(ptr: *anyopaque) void {
+            const self: *Block = @ptrCast(@alignCast(ptr));
+            self.updateBlock();
+        }
     };
-    self.execBlock(button) catch |err| {
-        log.err("cannot execute block script, error: {s}", .{@errorName(err)});
-        return;
+
+    return .{
+        .ptr = ctx,
+        .getFdFn = gen.getFd,
+        .onTriggerFn = gen.onTrigger,
     };
 }
 
-pub fn getSigEvent(self: *Block) SigEvent {
-    return SigEvent.init(self);
+pub fn sigEvent(ctx: *Block) SigEvent {
+    const gen = struct {
+        pub fn getSig(ptr: *anyopaque) u8 {
+            const self: *Block = @ptrCast(@alignCast(ptr));
+            const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
+            return SIGRTMIN + self.signum;
+        }
+        pub fn onSigTrigger(ptr: *anyopaque, data: i32) void {
+            const self: *Block = @ptrCast(@alignCast(ptr));
+            self.execBlock(Button.fromInt(@intCast(data))) catch |err| {
+                log.err("cannot execute block script, error: {s}", .{@errorName(err)});
+                return;
+            };
+        }
+    };
+
+    return .{
+        .ptr = ctx,
+        .getSigFn = gen.getSig,
+        .onSigTriggerFn = gen.onSigTrigger,
+    };
 }
 
 test "exec" {
@@ -295,11 +308,11 @@ test "execute block" {
     try block.execBlock(mid);
 
     const epoll_fd = try posix.epoll_create1(0);
-    var event = linux.epoll_event{
+    var evt = linux.epoll_event{
         .events = linux.EPOLL.IN,
         .data = .{ .fd = block.pipe[0] },
     };
-    try posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, block.pipe[0], &event);
+    try posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, block.pipe[0], &evt);
     var events: [1]linux.epoll_event = undefined;
     _ = posix.epoll_wait(epoll_fd, &events, -1);
 
@@ -309,16 +322,11 @@ test "execute block" {
 
 test "create button" {
     const testing = std.testing;
-    try testing.expectEqual(Button.left, try Button.fromInt(1));
-    try testing.expectEqual(Button.right, try Button.fromInt(3));
-    try testing.expectEqual(Button.ctrlLeft, try Button.fromInt(6));
-    try testing.expectError(ButtonError.InvalidNumberASCII, Button.fromInt(10));
-    try testing.expectError(ButtonError.InvalidNumberASCII, Button.fromInt(0));
-    const btn = if (Button.fromInt(100)) |btn| btn else |_| e: {
-        break :e null;
-    };
-
-    try testing.expectEqual(null, btn);
+    try testing.expectEqual(Button.left, Button.fromInt(1));
+    try testing.expectEqual(Button.right, Button.fromInt(3));
+    try testing.expectEqual(Button.ctrlLeft, Button.fromInt(6));
+    try testing.expectEqual(null, Button.fromInt(10));
+    try testing.expectEqual(null, Button.fromInt(0));
 }
 
 test "script env map" {

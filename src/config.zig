@@ -1,3 +1,5 @@
+/// 默认使用 XDG_DATA_HOME 目录
+/// 否则使用 HOME/.local/share 目录
 pub const DATA_DIR_NAME = "dwmblocks";
 pub const MAX_OUTPUT = 60;
 

@@ -22,28 +22,6 @@ pub const Event = struct {
     getFdFn: *const fn (ptr: *anyopaque) posix.fd_t,
     onTriggerFn: *const fn (ptr: *anyopaque) void,
 
-    pub fn init(ptr: anytype) Event {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn getFd(pointer: *anyopaque) posix.fd_t {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.Pointer.child.getFd(self);
-            }
-            pub fn onTrigger(pointer: *anyopaque) void {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.Pointer.child.onTrigger(self);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .getFdFn = gen.getFd,
-            .onTriggerFn = gen.onTrigger,
-        };
-    }
-
     pub fn getFd(self: Event) posix.fd_t {
         return self.getFdFn(self.ptr);
     }
@@ -58,28 +36,6 @@ pub const SigEvent = struct {
     getSigFn: *const fn (ptr: *anyopaque) u8,
     onSigTriggerFn: *const fn (ptr: *anyopaque, data: i32) void,
 
-    pub fn init(ptr: anytype) SigEvent {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn getSig(pointer: *anyopaque) u8 {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.Pointer.child.getSig(self);
-            }
-            pub fn onSigTrigger(pointer: *anyopaque, data: i32) void {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.Pointer.child.onSigTrigger(self, data);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .getSigFn = gen.getSig,
-            .onSigTriggerFn = gen.onSigTrigger,
-        };
-    }
-
     pub fn getSig(self: SigEvent) u8 {
         return self.getSigFn(self.ptr);
     }
@@ -89,41 +45,29 @@ pub const SigEvent = struct {
     }
 };
 
-pub const SigEventComposition = struct {
-    sig_fd: posix.fd_t,
-    sig_events: []SigEvent,
+pub const SigEventCombinator = struct {
+    sig_fd: ?posix.fd_t = null,
+    events: std.ArrayList(SigEvent),
 
-    pub fn init(sig_events: []SigEvent) SigEventComposition {
-        const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
-        const SIGRTMAX: u8 = @intCast(signal.__libc_current_sigrtmax());
-        var handled_sig: signal.sigset_t = undefined;
-        _ = signal.sigemptyset(&handled_sig);
-        for (sig_events) |sig_evt| {
-            _ = signal.sigaddset(&handled_sig, sig_evt.getSig());
-        }
-
-        // Create a signal file descriptor for epoll to watch
-        const sig_fd = signal.signalfd(-1, &handled_sig, linux.SFD.NONBLOCK);
-
-        // Block all realtime and handled signals
-        for (SIGRTMIN..SIGRTMAX + 1) |i| _ = signal.sigaddset(&handled_sig, @intCast(i));
-        _ = signal.sigprocmask(SIG.BLOCK, &handled_sig, null);
-
+    pub fn init(alloc: Allocator) SigEventCombinator {
         return .{
-            .sig_fd = sig_fd,
-            .sig_events = sig_events,
+            .events = std.ArrayList(SigEvent).init(alloc),
         };
     }
 
-    pub fn deinit(self: *SigEventComposition) void {
-        posix.close(self.sig_fd);
+    pub fn deinit(self: *SigEventCombinator) void {
+        if (self.sig_fd) |fd| posix.close(fd);
+        self.events.deinit();
     }
 
-    pub fn getFd(self: *SigEventComposition) posix.fd_t {
-        return self.sig_fd;
+    pub fn add(self: *SigEventCombinator, event: SigEvent) void {
+        self.events.append(event) catch |err| {
+            log.err("cannot add sig event, error: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
     }
 
-    pub fn onTrigger(self: *SigEventComposition) void {
+    pub fn onTrigger(self: *SigEventCombinator) void {
         var info: linux.signalfd_siginfo = undefined;
         _ = unix.read(self.sig_fd, &info, @sizeOf(linux.signalfd_siginfo));
 
@@ -132,8 +76,47 @@ pub const SigEventComposition = struct {
         }
     }
 
-    pub fn composeEvent(self: *SigEventComposition) Event {
-        return Event.init(self);
+    pub fn getEvent(self: *SigEventCombinator) Event {
+        if (self.sig_fd != null) @panic("sig already convert to fd");
+
+        const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
+        const SIGRTMAX: u8 = @intCast(signal.__libc_current_sigrtmax());
+        var handled_sig: signal.sigset_t = undefined;
+        _ = signal.sigemptyset(&handled_sig);
+        for (self.events.items) |sig_evt| {
+            _ = signal.sigaddset(&handled_sig, sig_evt.getSig());
+        }
+
+        // Create a signal file descriptor for epoll to watch
+        self.sig_fd = signal.signalfd(-1, &handled_sig, linux.SFD.NONBLOCK);
+
+        // Block all realtime and handled signals
+        for (SIGRTMIN..SIGRTMAX + 1) |i| _ = signal.sigaddset(&handled_sig, @intCast(i));
+        _ = signal.sigprocmask(SIG.BLOCK, &handled_sig, null);
+
+        const gen = struct {
+            pub fn getFd(ptr: *anyopaque) posix.fd_t {
+                const slf: *SigEventCombinator = @ptrCast(@alignCast(ptr));
+                return slf.sig_fd orelse unreachable;
+            }
+            pub fn onTrigger(ptr: *anyopaque) void {
+                const slf: *SigEventCombinator = @ptrCast(@alignCast(ptr));
+
+                var info: linux.signalfd_siginfo = undefined;
+                _ = unix.read(slf.sig_fd orelse unreachable, &info, @sizeOf(linux.signalfd_siginfo));
+                for (slf.events.items) |sig_evt| {
+                    if (sig_evt.getSig() == info.signo) {
+                        sig_evt.onSigTrigger(info.int & 0xff);
+                    }
+                }
+            }
+        };
+
+        return .{
+            .ptr = self,
+            .getFdFn = gen.getFd,
+            .onTriggerFn = gen.onTrigger,
+        };
     }
 };
 
