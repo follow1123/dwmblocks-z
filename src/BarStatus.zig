@@ -51,11 +51,11 @@ pub fn updateStatus(self: *BarStatus) !bool {
     return std.mem.eql(u8, self.previous.items, self.current.items);
 }
 
-pub fn execBlocks(self: *BarStatus, time: i32) !void {
+pub fn execBlocks(self: *BarStatus, time: i32) void {
     log.debug("execute block by time", .{});
     for (self.blocks) |*block| {
         if (time == 0 or (block.interval != 0 and @mod(time, block.interval) == 0)) {
-            try block.execBlock(null);
+            block.execBlock(null);
         }
     }
 }
@@ -80,10 +80,7 @@ pub fn sigEvent(ctx: *BarStatus) SigEvent {
         }
         pub fn onSigTrigger(ptr: *anyopaque, _: i32) void {
             const self: *BarStatus = @ptrCast(@alignCast(ptr));
-            self.execBlocks(0) catch |err| {
-                log.err("cannot execute blocks, error: {s}", .{@errorName(err)});
-                return;
-            };
+            self.execBlocks(0);
         }
     };
 
@@ -98,10 +95,7 @@ pub fn triggerEvent(ctx: *BarStatus) TriggerEvent {
     const gen = struct {
         pub fn onTrigger(ptr: *anyopaque, time: u16) void {
             const self: *BarStatus = @ptrCast(@alignCast(ptr));
-            self.execBlocks(time) catch |err| {
-                log.err("cannot execute blocks, error: {s}", .{@errorName(err)});
-                return;
-            };
+            self.execBlocks(time);
         }
     };
 
@@ -135,7 +129,7 @@ test "write status bar" {
     for (&bs, 0..) |*b, i| {
         var buf: [1]u8 = undefined;
         const s = try std.fmt.bufPrint(&buf, "{}", .{i});
-        try b.execBlock(s);
+        b.execBlock(s);
     }
     defer for (&bs) |*b| b.deinit();
 

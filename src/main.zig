@@ -33,7 +33,7 @@ pub fn main() !void {
             max_interval = @max(interval, max_interval);
             timer_tick = std.math.gcd(interval, timer_tick);
         }
-        blocks[i] = try Block.init(alloc, path, interval, signum);
+        blocks[i] = Block.init(alloc, path, interval, signum);
         log.debug("script path: {s}, \tinterval: {}, \tsignum: {}, pipe: ({}, {})", .{ blocks[i].script, blocks[i].interval, blocks[i].signum, blocks[i].pipe[0], blocks[i].pipe[1] });
     }
     defer for (&blocks) |*block| block.deinit();
@@ -60,10 +60,6 @@ pub fn main() !void {
         if (block.signum > 0) sig_event_combinator.add(block.sigEvent());
     }
 
-    // 避免僵尸子进程
-    var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = posix.SA.NOCLDWAIT, .handler = .{ .handler = SIG.DFL } };
-    try posix.sigaction(SIG.CHLD, &sa, null);
-
     var sig_event = sig_event_combinator.getEvent();
     multiplexer.registerEvent(&sig_event);
     log.debug("register all signal", .{});
@@ -80,8 +76,8 @@ pub fn main() !void {
 }
 
 test "app test" {
-    // _ = Block;
+    _ = Block;
     // _ = BarStatus;
-    _ = Timer;
+    // _ = Timer;
     // _ = Multiplexer;
 }

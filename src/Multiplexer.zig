@@ -97,13 +97,13 @@ pub const SigEventCombinator = struct {
         const gen = struct {
             pub fn getFd(ptr: *anyopaque) posix.fd_t {
                 const slf: *SigEventCombinator = @ptrCast(@alignCast(ptr));
-                return slf.sig_fd orelse unreachable;
+                return slf.sig_fd.?;
             }
             pub fn onTrigger(ptr: *anyopaque) void {
                 const slf: *SigEventCombinator = @ptrCast(@alignCast(ptr));
 
                 var info: linux.signalfd_siginfo = undefined;
-                _ = unix.read(slf.sig_fd orelse unreachable, &info, @sizeOf(linux.signalfd_siginfo));
+                _ = unix.read(slf.sig_fd.?, &info, @sizeOf(linux.signalfd_siginfo));
                 for (slf.events.items) |sig_evt| {
                     if (sig_evt.getSig() == info.signo) {
                         sig_evt.onSigTrigger(info.int & 0xff);
@@ -221,7 +221,7 @@ test "register block event" {
     multiplexer.registerEvent(&event);
 
     const btn = Block.Button.up;
-    try block.execBlock(btn);
+    block.execBlock(btn);
     _ = multiplexer.waitEvents();
 
     try testing.expectEqualSlices(u8, &.{btn.getChar()}, block.getOutput());

@@ -16,7 +16,8 @@ const config = @import("config.zig");
 const Event = @import("Multiplexer.zig").Event;
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 
-var static_data: struct { env_map: ScriptEnvMap, data_home: [:0]u8 } = undefined;
+var data_home: [:0]u8 = undefined;
+var env_map: std.process.EnvMap = undefined;
 
 pub const Button = enum(u8) {
     left = '1',
@@ -37,35 +38,6 @@ pub const Button = enum(u8) {
     }
 };
 
-const ScriptEnvMap = struct {
-    map: std.process.EnvMap,
-    ext_envs: std.ArrayList([]const u8),
-
-    pub fn init(alloc: Allocator) ScriptEnvMap {
-        const env_map = std.process.getEnvMap(alloc) catch @panic("cannot init env map");
-        return .{
-            .map = env_map,
-            .ext_envs = std.ArrayList([]const u8).init(alloc),
-        };
-    }
-    pub fn deinit(self: *ScriptEnvMap) void {
-        self.map.deinit();
-        self.ext_envs.deinit();
-    }
-
-    pub fn put(self: *ScriptEnvMap, key: []const u8, value: []const u8) void {
-        self.ext_envs.append(key) catch |err| {
-            log.err("cannot add environment variable to env map, error: {s}", .{@errorName(err)});
-        };
-        self.map.put(key, value) catch |err| {
-            log.err("cannot add environment variable to env map, error: {s}", .{@errorName(err)});
-        };
-    }
-    pub fn restore(self: *ScriptEnvMap) void {
-        for (self.ext_envs.items) |key| self.map.remove(key);
-    }
-};
-
 alloc: Allocator,
 script: [:0]const u8,
 interval: i32,
@@ -76,128 +48,55 @@ pipe: [2]posix.fd_t,
 lock: bool = false,
 
 fn initDataHome(alloc: Allocator) [:0]u8 {
-    if (std.process.getEnvVarOwned(alloc, "XDG_DATA_HOME")) |xdg_data_home| {
-        defer alloc.free(xdg_data_home);
-        return std.fs.path.joinZ(alloc, &.{ xdg_data_home, config.DATA_DIR_NAME }) catch |err| {
-            log.err("init datahome error, cannot join xdg data path, error: {s}", .{@errorName(err)});
-            std.process.exit(1);
-        };
-    } else |_| {
-        const home = std.process.getEnvVarOwned(alloc, "HOME") catch {
-            @panic("no 'HOME' environment to join script path");
-        };
+    const xdg_data_home = std.process.getEnvVarOwned(alloc, "XDG_DATA_HOME") catch {
+        const home = std.process.getEnvVarOwned(alloc, "HOME") catch @panic("no 'HOME' environment to join script path");
         defer alloc.free(home);
-        return std.fs.path.joinZ(alloc, &.{ home, ".local/share", config.DATA_DIR_NAME }) catch |err| {
-            log.err("init datahome error, cannot join home path, error: {s}", .{@errorName(err)});
-            std.process.exit(1);
-        };
-    }
+        return std.fs.path.joinZ(alloc, &.{ home, ".local/share", config.DATA_DIR_NAME }) catch @panic("cannot join home path");
+    };
+    defer alloc.free(xdg_data_home);
+    return std.fs.path.joinZ(alloc, &.{ xdg_data_home, config.DATA_DIR_NAME }) catch @panic("cannot join xdg data path");
 }
 
 pub fn staticInit(alloc: Allocator) void {
-    static_data = .{
-        .env_map = ScriptEnvMap.init(alloc),
-        .data_home = initDataHome(alloc),
-    };
+    data_home = initDataHome(alloc);
+    env_map = std.process.getEnvMap(alloc) catch @panic("cannot get environment variable");
+    ScriptExecutor.avoidZombieSubProcess() catch @panic("cannot handle child signal");
 }
 
 pub fn staticDeinit(alloc: Allocator) void {
-    static_data.env_map.deinit();
-    alloc.free(static_data.data_home);
+    alloc.free(data_home);
+    env_map.deinit();
 }
 
-pub fn init(alloc: Allocator, script: [:0]const u8, interval: i32, signum: u7) !Block {
+pub fn init(alloc: Allocator, script: [:0]const u8, interval: i32, signum: u7) Block {
+    const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
     return .{
-        .signum = signum,
+        .signum = @intCast(SIGRTMIN + signum),
         .alloc = alloc,
-        .script = try std.fs.path.joinZ(alloc, &.{ static_data.data_home, script }),
+        .script = std.fs.path.joinZ(alloc, &.{ data_home, script }) catch @panic("cannot join script path"),
         .interval = interval,
-        .pipe = try posix.pipe2(.{ .NONBLOCK = true }),
-        .output = try alloc.alloc(u8, config.MAX_OUTPUT),
+        .pipe = posix.pipe2(.{ .NONBLOCK = true }) catch @panic("cannot create pipe"),
+        .output = alloc.alloc(u8, config.MAX_OUTPUT) catch @panic("cannot create buf for reasult"),
     };
 }
 
 pub fn deinit(self: *Block) void {
     self.alloc.free(self.script);
+
     for (self.pipe) |p| posix.close(p);
     self.alloc.free(self.output);
 }
 
-pub fn execBlock(self: *Block, button: ?Button) !void {
+pub fn execBlock(self: *Block, button: ?Button) void {
     if (self.lock) return;
     self.lock = true;
+    const blk_btn_key = "BLOCK_BUTTON";
+    if (button) |btn| env_map.put(blk_btn_key, &.{btn.getChar()}) catch @panic("cannot put env to env map");
 
-    if (button) |btn| static_data.env_map.put("BLOCK_BUTTON", &.{btn.getChar()});
-    defer static_data.env_map.restore();
-
-    exec(self.alloc, self.pipe, self.script, &static_data.env_map.map);
-}
-
-fn exec(alloc: Allocator, pipe: [2]posix.fd_t, command: [:0]const u8, env_map: *std.process.EnvMap) void {
-    const executor_pid = posix.fork() catch |err| {
-        log.err("cannot fork process to execute command, error: {s}", .{@errorName(err)});
-        return;
-    };
-
-    // 子进程开始执行脚本
-    if (executor_pid == 0) {
-        defer std.process.exit(0);
-        posix.close(pipe[0]);
-        defer posix.close(pipe[1]);
-
-        var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = 0, .handler = .{ .handler = SIG.DFL } };
-
-        // 由于父进程配置 SIGCHID 不处理子进程
-        // 这里需要恢复 SIGCHID 默认处理方式才能调用 waitpid
-        posix.sigaction(SIG.CHLD, &sa, null) catch |err| {
-            log.err("cannot reset SIGCHILD handler, error: {s}", .{@errorName(err)});
-            return;
-        };
-
-        const cmd_pipe = posix.pipe2(.{
-            .NONBLOCK = true,
-        }) catch |err| {
-            log.err("cannot create pipe for read script output, error: {s}", .{@errorName(err)});
-            return;
-        };
-
-        const cmd_pid = posix.fork() catch |err| {
-            log.err("cannot fork process to execute script, error: {s}", .{@errorName(err)});
-            return;
-        };
-
-        const envp = std.process.createEnvironFromMap(alloc, env_map, .{}) catch |err| {
-            log.err("create environment point error, error: {s}", .{@errorName(err)});
-            return;
-        };
-        // for (envp) |env| log.debug("env: {s}", .{env orelse "null"});
-        defer alloc.free(envp);
-        // 再创建一个子进程执行脚本
-        if (cmd_pid == 0) {
-            posix.close(cmd_pipe[0]);
-            posix.dup2(cmd_pipe[1], posix.STDOUT_FILENO) catch |err| {
-                log.err("cannot refer stdout to parent pipe, error: {s}", .{@errorName(err)});
-                return;
-            };
-            posix.close(cmd_pipe[1]);
-            const err = posix.execveZ(command, &.{null}, envp.ptr);
-            log.err("execve error: {s}", .{@errorName(err)});
-            std.process.exit(1);
-        }
-        const result = posix.waitpid(cmd_pid, 0);
-        if (linux.W.IFEXITED(result.status) and linux.W.EXITSTATUS(result.status) == 0) {
-            var buf: [config.MAX_OUTPUT]u8 = undefined;
-            var len = posix.read(cmd_pipe[0], &buf) catch 0;
-            if (len > 0) {
-                _ = try posix.write(pipe[1], buf[0..len]);
-                // 丢弃多余的内容
-                while (len == buf.len) len = posix.read(cmd_pipe[0], &buf) catch 0;
-                return;
-            }
-        }
-        log.debug("{s} has no stdout, write a nextline char", .{command});
-        _ = try posix.write(pipe[1], "\n");
+    defer {
+        env_map.remove(blk_btn_key);
     }
+    ScriptExecutor.exec(self.alloc, self.pipe, self.script, &env_map);
 }
 
 pub fn getOutput(self: *Block) []u8 {
@@ -207,10 +106,7 @@ pub fn getOutput(self: *Block) []u8 {
 pub fn updateBlock(self: *Block) void {
     self.lock = false;
 
-    self.output_len = posix.read(self.pipe[0], self.output) catch |err| {
-        log.err("execute script has no output, error: {s}", .{@errorName(err)});
-        return;
-    };
+    self.output_len = ScriptExecutor.readResult(self.pipe[0], self.output);
     if (self.output_len > 0 and self.output[self.output_len - 1] == '\n') self.output_len -= 1;
 }
 
@@ -237,15 +133,11 @@ pub fn sigEvent(ctx: *Block) SigEvent {
     const gen = struct {
         pub fn getSig(ptr: *anyopaque) u8 {
             const self: *Block = @ptrCast(@alignCast(ptr));
-            const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
-            return SIGRTMIN + self.signum;
+            return self.signum;
         }
         pub fn onSigTrigger(ptr: *anyopaque, data: i32) void {
             const self: *Block = @ptrCast(@alignCast(ptr));
-            self.execBlock(Button.fromInt(@intCast(data))) catch |err| {
-                log.err("cannot execute block script, error: {s}", .{@errorName(err)});
-                return;
-            };
+            self.execBlock(Button.fromInt(@intCast(data)));
         }
     };
 
@@ -256,9 +148,90 @@ pub fn sigEvent(ctx: *Block) SigEvent {
     };
 }
 
-test "exec" {
+const ScriptExecutor = struct {
+    pub fn exec(alloc: Allocator, pipe: [2]posix.fd_t, command: [:0]const u8, env: *std.process.EnvMap) void {
+        const executor_pid = posix.fork() catch |err| {
+            log.err("cannot fork process to execute command, error: {s}", .{@errorName(err)});
+            return;
+        };
+
+        // 子进程开始执行脚本
+        if (executor_pid == 0) {
+            defer std.process.exit(0);
+            posix.close(pipe[0]);
+            defer posix.close(pipe[1]);
+
+            // 由于父进程配置 SIGCHID 不处理子进程
+            // 这里需要恢复 SIGCHID 默认处理方式才能调用 waitpid
+            var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = 0, .handler = .{ .handler = SIG.DFL } };
+            posix.sigaction(SIG.CHLD, &sa, null) catch |err| {
+                log.err("cannot reset SIGCHILD handler, error: {s}", .{@errorName(err)});
+                return;
+            };
+
+            const cmd_pipe = posix.pipe2(.{
+                .NONBLOCK = true,
+            }) catch |err| {
+                log.err("cannot create pipe for read script output, error: {s}", .{@errorName(err)});
+                return;
+            };
+
+            const cmd_pid = posix.fork() catch |err| {
+                log.err("cannot fork process to execute script, error: {s}", .{@errorName(err)});
+                return;
+            };
+
+            const envp = std.process.createEnvironFromMap(alloc, env, .{}) catch |err| {
+                log.err("create environment point error, error: {s}", .{@errorName(err)});
+                return;
+            };
+            defer alloc.free(envp);
+            // 再创建一个子进程执行脚本
+            if (cmd_pid == 0) {
+                posix.close(cmd_pipe[0]);
+                posix.dup2(cmd_pipe[1], posix.STDOUT_FILENO) catch |err| {
+                    log.err("cannot refer stdout to parent pipe, error: {s}", .{@errorName(err)});
+                    return;
+                };
+                posix.close(cmd_pipe[1]);
+                const err = posix.execveZ(command, &.{null}, envp.ptr);
+                log.err("execve error: {s}", .{@errorName(err)});
+                std.process.exit(1);
+            }
+            const result = posix.waitpid(cmd_pid, 0);
+            if (linux.W.IFEXITED(result.status) and linux.W.EXITSTATUS(result.status) == 0) {
+                var buf: [config.MAX_OUTPUT]u8 = undefined;
+                var len = posix.read(cmd_pipe[0], &buf) catch 0;
+                if (len > 0) {
+                    _ = try posix.write(pipe[1], buf[0..len]);
+                    // 丢弃多余的内容
+                    while (len == buf.len) len = posix.read(cmd_pipe[0], &buf) catch 0;
+                    return;
+                }
+            }
+            log.debug("{s} has no stdout, write a nextline char", .{command});
+            _ = try posix.write(pipe[1], "\n");
+        }
+    }
+
+    pub fn readResult(reader_pipe: posix.fd_t, buf: []u8) usize {
+        return posix.read(reader_pipe, buf) catch |err| {
+            log.err("execute script has no output, error: {s}", .{@errorName(err)});
+            return 0;
+        };
+    }
+
+    /// 避免僵尸子进程
+    pub fn avoidZombieSubProcess() !void {
+        var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = posix.SA.NOCLDWAIT, .handler = .{ .handler = SIG.DFL } };
+        try posix.sigaction(SIG.CHLD, &sa, null);
+    }
+};
+
+test "scritp executor" {
     const testing = std.testing;
     const alloc = testing.allocator;
+    const pipe = try posix.pipe();
 
     // 获取脚本路径
     const script_path = try std.fs.cwd().realpathAlloc(alloc, "tests/scripts/test_script");
@@ -266,26 +239,25 @@ test "exec" {
     const path = try std.mem.Allocator.dupeZ(alloc, u8, script_path);
     defer alloc.free(path);
 
-    var env_map = try std.process.getEnvMap(alloc);
-    defer env_map.deinit();
-    const btn = "1";
-    try env_map.put("BLOCK_BUTTON", btn);
+    var env = std.process.EnvMap.init(alloc);
+    defer env.deinit();
 
-    const pipe = try posix.pipe();
-    exec(alloc, pipe, path, &env_map);
+    const data = "dfs";
+    try env.put("BLOCK_BUTTON", data);
+
+    ScriptExecutor.exec(alloc, pipe, path, &env);
 
     var buf: [1024]u8 = undefined;
-    const len = try posix.read(pipe[0], &buf);
-    try testing.expectEqualSlices(u8, btn, buf[0..len]);
-    // log.err("output: {s}", .{buf[0..len]});
+    const len = ScriptExecutor.readResult(pipe[0], &buf);
+    try testing.expectEqualSlices(u8, data, buf[0..len]);
 }
 
 test "init data home" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    const data_home = initDataHome(alloc);
-    defer alloc.free(data_home);
-    try testing.expect(data_home.len > 0);
+    const data_path = initDataHome(alloc);
+    defer alloc.free(data_path);
+    try testing.expect(std.mem.endsWith(u8, data_path, config.DATA_DIR_NAME));
 }
 
 test "execute block" {
@@ -297,15 +269,12 @@ test "execute block" {
     defer alloc.free(script_path);
 
     Block.staticInit(alloc);
-    alloc.free(Block.static_data.data_home);
-    Block.static_data.data_home = try std.mem.Allocator.dupeZ(alloc, u8, script_path);
     defer Block.staticDeinit(alloc);
+    alloc.free(data_home);
+    data_home = try std.mem.Allocator.dupeZ(alloc, u8, script_path);
 
-    var block = try Block.init(alloc, "test_script", 1, 1);
+    var block = Block.init(alloc, "test_script", 1, 1);
     defer block.deinit();
-
-    const mid = Button.middle;
-    try block.execBlock(mid);
 
     const epoll_fd = try posix.epoll_create1(0);
     var evt = linux.epoll_event{
@@ -313,10 +282,14 @@ test "execute block" {
         .data = .{ .fd = block.pipe[0] },
     };
     try posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, block.pipe[0], &evt);
+
+    const mid = Button.middle;
+    block.execBlock(mid);
+
     var events: [1]linux.epoll_event = undefined;
     _ = posix.epoll_wait(epoll_fd, &events, -1);
 
-    try block.updateBlock();
+    block.updateBlock();
     try testing.expectEqualSlices(u8, &.{mid.getChar()}, block.getOutput());
 }
 
@@ -327,23 +300,4 @@ test "create button" {
     try testing.expectEqual(Button.ctrlLeft, Button.fromInt(6));
     try testing.expectEqual(null, Button.fromInt(10));
     try testing.expectEqual(null, Button.fromInt(0));
-}
-
-test "script env map" {
-    const testing = std.testing;
-    const alloc = testing.allocator;
-
-    var script_env_map = ScriptEnvMap.init(alloc);
-    defer script_env_map.deinit();
-
-    script_env_map.put("AAA", "aaa");
-    script_env_map.put("BBB", "bbb");
-
-    try testing.expect(script_env_map.map.hash_map.contains("HOME"));
-    try testing.expect(script_env_map.map.hash_map.contains("AAA"));
-    try testing.expect(script_env_map.map.hash_map.contains("BBB"));
-    script_env_map.restore();
-    try testing.expect(script_env_map.map.hash_map.contains("HOME"));
-    try testing.expect(!script_env_map.map.hash_map.contains("AAA"));
-    try testing.expect(!script_env_map.map.hash_map.contains("BBB"));
 }
