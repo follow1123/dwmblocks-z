@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const SIG = posix.SIG;
 
-const Block = @import("Block.zig");
+const Block = @import("block/Block.zig");
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 const TriggerEvent = @import("Timer.zig").TriggerEvent;
 const X11 = @import("X11.zig");

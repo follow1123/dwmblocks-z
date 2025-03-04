@@ -7,7 +7,6 @@ const posix = std.posix;
 const SIG = posix.SIG;
 const c = std.c;
 
-const Allocator = std.mem.Allocator;
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 
 pub const TriggerEvent = struct {

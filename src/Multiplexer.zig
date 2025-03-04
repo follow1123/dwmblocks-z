@@ -156,74 +156,79 @@ pub fn waitEvents(self: *Multiplexer) usize {
 
 test "register event" {
     const testing = std.testing;
-    // testing.log_level = .debug;
+
+    const gen = struct {
+        var flag = false;
+        var pipe: [2]posix.fd_t = undefined;
+        pub fn getFd(_: *anyopaque) posix.fd_t {
+            return pipe[0];
+        }
+        pub fn onTrigger(_: *anyopaque) void {
+            flag = true;
+        }
+    };
+    gen.pipe = try posix.pipe();
+
+    var event = Event{
+        .ptr = undefined,
+        .getFdFn = gen.getFd,
+        .onTriggerFn = gen.onTrigger,
+    };
 
     var multiplexer = Multiplexer.init();
+    defer multiplexer.deinit();
 
-    const Pipe = struct {
-        const Self = @This();
-        pipe: [2]posix.fd_t,
-        pub fn getFd(self: *Self) posix.fd_t {
-            return self.pipe[0];
-        }
-        pub fn onTrigger(self: *Self) void {
-            _ = self;
-            log.debug("test trigger", .{});
-        }
-        pub fn getEvent(self: *Self) Event {
-            return Event.init(self);
-        }
-    };
-
-    var pipe = Pipe{
-        .pipe = try posix.pipe2(.{ .NONBLOCK = true }),
-    };
-
-    log.debug("create a pipe event: {*}, read: {}, write: {}", .{ &pipe, pipe.pipe[0], pipe.pipe[1] });
-
-    var event = pipe.getEvent();
     multiplexer.registerEvent(&event);
-
-    const pp = pipe.pipe;
-    if (try posix.fork() == 0) {
-        posix.close(pp[0]);
-        defer posix.close(pp[1]);
-        defer std.process.exit(0);
-        std.time.sleep(500 * std.time.ns_per_ms);
-        const len = try posix.write(pp[1], "hello");
-        log.debug("subprocess write {} length data", .{len});
-    }
-
-    _ = multiplexer.waitEvents();
-
-    var buf: [100]u8 = undefined;
-
-    const len = try posix.read(pipe.getFd(), &buf);
-    try testing.expectEqualSlices(u8, "hello", buf[0..len]);
+    _ = try posix.write(gen.pipe[1], "111");
+    const evt_count = multiplexer.waitEvents();
+    try testing.expectEqual(1, evt_count);
+    try testing.expect(gen.flag);
 }
 
-test "register block event" {
+test "register signal event" {
     const testing = std.testing;
     const alloc = testing.allocator;
-    // testing.log_level = .debug;
 
-    const Block = @import("Block.zig");
+    const gen = struct {
+        var flag1: i32 = undefined;
+        var flag2 = false;
+        pub fn getSig(_: *anyopaque) u8 {
+            return 2;
+        }
 
-    Block.staticInit(alloc);
-    defer Block.staticDeinit(alloc);
+        pub fn onSigTrigger(_: *anyopaque, data: i32) void {
+            flag1 = data;
+            flag2 = true;
+        }
+    };
 
-    var block = try Block.init(alloc, "test_script", 1, 1);
-    defer block.deinit();
+    const sig_event = SigEvent{
+        .ptr = undefined,
+        .getSigFn = gen.getSig,
+        .onSigTriggerFn = gen.onSigTrigger,
+    };
 
     var multiplexer = Multiplexer.init();
+    defer multiplexer.deinit();
 
-    var event = block.getEvent();
+    var combinator = SigEventCombinator.init(alloc);
+    defer combinator.deinit();
+
+    combinator.add(sig_event);
+    var event = combinator.getEvent();
+
     multiplexer.registerEvent(&event);
 
-    const btn = Block.Button.up;
-    block.execBlock(btn);
-    _ = multiplexer.waitEvents();
+    try posix.raise(2);
 
-    try testing.expectEqualSlices(u8, &.{btn.getChar()}, block.getOutput());
-    // log.debug("block output: {s}", .{block.getOutput()});
+    var evt_count = multiplexer.waitEvents();
+    try testing.expectEqual(1, evt_count);
+    try testing.expect(gen.flag2);
+
+    const val = signal.union_sigval{ .sival_int = 101 };
+
+    _ = signal.sigqueue(std.os.linux.getpid(), 2, val);
+    evt_count = multiplexer.waitEvents();
+    try testing.expectEqual(1, evt_count);
+    try testing.expectEqual(val.sival_int, gen.flag1);
 }

@@ -1,10 +1,8 @@
 const std = @import("std");
 const log = std.log;
 
-const posix = std.posix;
-const SIG = posix.SIG;
-
-const Block = @import("Block.zig");
+const Block = @import("block/Block.zig");
+const ScriptExecutor = @import("block/ScriptExecutor.zig");
 const BarStatus = @import("BarStatus.zig");
 const Timer = @import("Timer.zig");
 const Multiplexer = @import("Multiplexer.zig");
@@ -24,8 +22,8 @@ pub fn main() !void {
     var blocks: [block_count]Block = undefined;
 
     log.debug("load block from config", .{});
-    Block.staticInit(alloc);
-    defer Block.staticDeinit(alloc);
+    ScriptExecutor.staticInit(alloc);
+    defer ScriptExecutor.staticDeinit(alloc);
     inline for (config.blocks, 0..) |b, i| {
         const path, const interval: u16, const signum: u8 = b;
         // Calculate the max interval and tick size for the timer
@@ -33,8 +31,12 @@ pub fn main() !void {
             max_interval = @max(interval, max_interval);
             timer_tick = std.math.gcd(interval, timer_tick);
         }
-        blocks[i] = Block.init(alloc, path, interval, signum);
-        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}, pipe: ({}, {})", .{ blocks[i].script, blocks[i].interval, blocks[i].signum, blocks[i].pipe[0], blocks[i].pipe[1] });
+        var script_executor = ScriptExecutor.init(alloc, path);
+        var executor = script_executor.executor();
+
+        blocks[i] = Block.init(alloc, &executor, interval, signum);
+        // blocks[i] = Block.init(alloc, path, interval, signum);
+        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}", .{ path, blocks[i].interval, blocks[i].signum });
     }
     defer for (&blocks) |*block| block.deinit();
     log.debug("max_interval: {}, timer_tick: {}", .{ max_interval, timer_tick });
@@ -56,7 +58,6 @@ pub fn main() !void {
     inline for (&blocks) |*block| {
         var block_event = block.event();
         multiplexer.registerEvent(&block_event);
-        log.debug("register block: {s}", .{block.script});
         if (block.signum > 0) sig_event_combinator.add(block.sigEvent());
     }
 
@@ -76,8 +77,9 @@ pub fn main() !void {
 }
 
 test "app test" {
-    _ = Block;
+    // _ = Block;
+    // _ = ScriptExecutor;
     // _ = BarStatus;
     // _ = Timer;
-    // _ = Multiplexer;
+    _ = Multiplexer;
 }
