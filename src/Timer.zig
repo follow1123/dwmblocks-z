@@ -3,9 +3,8 @@ const Timer = @This();
 const std = @import("std");
 const log = std.log;
 
-const posix = std.posix;
-const SIG = posix.SIG;
-const c = std.c;
+const unix = @import("unix.zig");
+const signal = unix.signal;
 
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 
@@ -24,7 +23,7 @@ const SigUtil = struct {
 
     /// 给自己发送一个信号
     pub fn raise(sig: u8) void {
-        posix.raise(sig) catch |err| {
+        signal.raise(sig) catch |err| {
             log.err("cannot send signal alrm, error: {s}", .{@errorName(err)});
             std.process.exit(1);
         };
@@ -32,16 +31,16 @@ const SigUtil = struct {
 
     /// 指定时间后给自己发送一个 ALRM(14) 信号
     pub fn alarm(timer_tick: u16) void {
-        _ = c.alarm(@intCast(timer_tick));
+        _ = unix.alarm(@intCast(timer_tick));
     }
 
     /// 阻塞停止信号
     pub fn blockStopSignal() void {
-        var sa = posix.Sigaction{ .mask = posix.empty_sigset, .flags = 0, .handler = .{ .handler = SigUtil.termHandler } };
+        var sa = signal.Action{ .mask = signal.EMPTY_SIGSET, .flags = 0, .handler = .{ .handler = SigUtil.termHandler } };
 
         // 处理结束信号
-        posix.sigaction(SIG.TERM, &sa, null) catch @panic("handle sigterm sigaction error");
-        posix.sigaction(SIG.INT, &sa, null) catch @panic("handle sigint sigaction error");
+        signal.action(signal.TERM, &sa) catch @panic("handle sigterm sigaction error");
+        signal.action(signal.INT, &sa) catch @panic("handle sigint sigaction error");
     }
 
     /// 捕获到 INT(2) 或 TERM(15) 信号设置结束标识
@@ -54,7 +53,7 @@ const SigUtil = struct {
 max_interval: u16,
 timer_tick: u16,
 time: u16 = 0,
-sig: u8 = SIG.ALRM,
+sig: u8 = signal.ALRM,
 event: *TriggerEvent,
 
 pub fn init(max_interval: u16, timer_tick: u16, event: *TriggerEvent) Timer {

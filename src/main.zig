@@ -1,8 +1,10 @@
 const std = @import("std");
 const log = std.log;
 
-const Block = @import("block/Block.zig");
-const ScriptExecutor = @import("block/ScriptExecutor.zig");
+const block = @import("block.zig");
+const Block = block.Block;
+const ScriptExecutor = block.ScriptExecutor;
+
 const BarStatus = @import("BarStatus.zig");
 const Timer = @import("Timer.zig");
 const Multiplexer = @import("Multiplexer.zig");
@@ -10,10 +12,10 @@ const SigEventCombinator = @import("Multiplexer.zig").SigEventCombinator;
 
 const config = @import("config.zig");
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+pub fn main() void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
 
     const block_count = config.blocks.len;
     var max_interval: u16 = 0;
@@ -32,13 +34,11 @@ pub fn main() !void {
             timer_tick = std.math.gcd(interval, timer_tick);
         }
         var script_executor = ScriptExecutor.init(alloc, path);
+        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}", .{ path, interval, signum });
         var executor = script_executor.executor();
-
         blocks[i] = Block.init(alloc, &executor, interval, signum);
-        // blocks[i] = Block.init(alloc, path, interval, signum);
-        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}", .{ path, blocks[i].interval, blocks[i].signum });
     }
-    defer for (&blocks) |*block| block.deinit();
+    defer for (&blocks) |*b| b.deinit();
     log.debug("max_interval: {}, timer_tick: {}", .{ max_interval, timer_tick });
     var sig_event_combinator = SigEventCombinator.init(alloc);
     defer sig_event_combinator.deinit();
@@ -46,7 +46,7 @@ pub fn main() !void {
     var multiplexer = Multiplexer.init();
     defer multiplexer.deinit();
 
-    var status = try BarStatus.init(alloc, &blocks);
+    var status = BarStatus.init(alloc, &blocks);
     defer status.deinit();
 
     sig_event_combinator.add(status.sigEvent());
@@ -55,10 +55,10 @@ pub fn main() !void {
     var timer = Timer.init(max_interval, timer_tick, &trigger_event);
     sig_event_combinator.add(timer.sigEvent());
 
-    inline for (&blocks) |*block| {
-        var block_event = block.event();
+    inline for (&blocks) |*b| {
+        var block_event = b.event();
         multiplexer.registerEvent(&block_event);
-        if (block.signum > 0) sig_event_combinator.add(block.sigEvent());
+        if (b.signum > 0) sig_event_combinator.add(b.sigEvent());
     }
 
     var sig_event = sig_event_combinator.getEvent();
@@ -70,16 +70,15 @@ pub fn main() !void {
 
     while (timer.isRunning()) {
         const evt_count = multiplexer.waitEvents();
-        if (evt_count != -1) try status.writeStatus();
+        if (evt_count != -1) status.writeStatus();
     }
 
     log.debug("exit", .{});
 }
 
 test "app test" {
-    // _ = Block;
-    // _ = ScriptExecutor;
-    // _ = BarStatus;
-    // _ = Timer;
+    _ = BarStatus;
+    _ = Timer;
     _ = Multiplexer;
+    _ = block;
 }

@@ -3,13 +3,9 @@ const Block = @This();
 const std = @import("std");
 const log = std.log;
 
-const posix = std.posix;
-const SIG = posix.SIG;
-const linux = std.os.linux;
-
-const signal = @cImport({
-    @cInclude("signal.h");
-});
+const unix = @import("../unix.zig");
+const signal = unix.signal;
+const epoll = unix.epoll;
 
 const Allocator = std.mem.Allocator;
 const config = @import("../config.zig");
@@ -25,12 +21,11 @@ signum: u7,
 output: []u8,
 output_len: usize = 0,
 executor: *ComponentExecutor,
+lock: bool = false,
 
 pub fn init(alloc: Allocator, executor: *ComponentExecutor, interval: i32, signum: u7) Block {
-    const SIGRTMIN: u8 = @intCast(signal.__libc_current_sigrtmin());
-
     return .{
-        .signum = @intCast(SIGRTMIN + signum),
+        .signum = @intCast(signal.RTMIN() + signum),
         .alloc = alloc,
         .interval = interval,
         .output = alloc.alloc(u8, config.MAX_OUTPUT) catch @panic("cannot create buf for reasult"),
@@ -40,16 +35,14 @@ pub fn init(alloc: Allocator, executor: *ComponentExecutor, interval: i32, signu
 
 pub fn deinit(self: *Block) void {
     self.alloc.free(self.output);
+    self.executor.deinit();
 }
 
 pub fn execBlock(self: *Block, button: ?Button) void {
-    const blk_btn_key = "BLOCK_BUTTON";
-    var env = EnvMap.init(self.alloc);
-    defer env.deinit();
+    if (self.lock) return;
+    self.lock = true;
 
-    if (button) |btn| env.put(blk_btn_key, &.{btn.getChar()}) catch @panic("cannot put env to env map");
-
-    self.executor.execute(&env);
+    self.executor.execute(button);
 }
 
 pub fn getOutput(self: *Block) []u8 {
@@ -57,13 +50,14 @@ pub fn getOutput(self: *Block) []u8 {
 }
 
 pub fn updateBlock(self: *Block) void {
+    self.lock = false;
     self.output_len = self.executor.readResult(self.output);
     if (self.output_len > 0 and self.output[self.output_len - 1] == '\n') self.output_len -= 1;
 }
 
 pub fn event(ctx: *Block) Event {
     const gen = struct {
-        pub fn getFd(ptr: *anyopaque) posix.fd_t {
+        pub fn getFd(ptr: *anyopaque) unix.FD {
             const self: *Block = @ptrCast(@alignCast(ptr));
             return self.executor.getFd();
         }
@@ -133,24 +127,23 @@ test "execute script block" {
     alloc.free(ScriptExecutor.data_home);
     ScriptExecutor.data_home = try std.mem.Allocator.dupeZ(alloc, u8, script_path);
     var script_executor = ScriptExecutor.init(alloc, "test_script");
-    defer script_executor.deinit();
     var executor = script_executor.executor();
 
     var block = Block.init(alloc, &executor, 1, 1);
     defer block.deinit();
 
-    const epoll_fd = try posix.epoll_create1(0);
-    var evt = linux.epoll_event{
-        .events = linux.EPOLL.IN,
+    const epoll_fd = try epoll.create();
+    var evt = epoll.Event{
+        .events = epoll.IN,
         .data = .{ .fd = script_executor.pipe[0] },
     };
-    try posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, script_executor.pipe[0], &evt);
+    try epoll.ctl(epoll_fd, epoll.CTL_ADD, script_executor.pipe[0], &evt);
 
     const mid = Button.middle;
     block.execBlock(mid);
 
-    var events: [1]linux.epoll_event = undefined;
-    _ = posix.epoll_wait(epoll_fd, &events, -1);
+    var events: [1]epoll.Event = undefined;
+    _ = epoll.wait(epoll_fd, &events, -1);
 
     block.updateBlock();
     try testing.expectEqualSlices(u8, &.{mid.getChar()}, block.getOutput());
