@@ -5,11 +5,11 @@ const log = std.log;
 
 const unix = @import("../unix.zig");
 
-const Button = @import("Block.zig").Button;
+const Message = @import("Block.zig").Message;
 
 ptr: *anyopaque,
 getFdFn: *const fn (ptr: *anyopaque) unix.FD,
-executeFn: *const fn (ptr: *anyopaque, button: ?Button) void,
+executeFn: *const fn (ptr: *anyopaque, message: Message) void,
 readResultFn: *const fn (ptr: *anyopaque, buf: []u8) usize,
 deinitFn: *const fn (ptr: *anyopaque) void,
 
@@ -19,8 +19,8 @@ pub inline fn getFd(self: ComponentExecutor) unix.FD {
 }
 
 /// 执行
-pub inline fn execute(self: ComponentExecutor, button: ?Button) void {
-    self.executeFn(self.ptr, button);
+pub inline fn execute(self: ComponentExecutor, message: Message) void {
+    self.executeFn(self.ptr, message);
 }
 
 pub inline fn deinit(self: ComponentExecutor) void {

@@ -17,26 +17,23 @@ pub fn main() void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    const block_count = config.blocks.len;
     var max_interval: u16 = 0;
     var timer_tick: u16 = 0;
 
-    var blocks: [block_count]Block = undefined;
+    var blocks: [config.blocks.len]Block = undefined;
 
     log.debug("load block from config", .{});
-    ScriptExecutor.staticInit(alloc);
-    defer ScriptExecutor.staticDeinit(alloc);
+    ScriptExecutor.staticInit();
     inline for (config.blocks, 0..) |b, i| {
-        const path, const interval: u16, const signum: u8 = b;
+        const name, const component, const interval: u16 = b;
         // Calculate the max interval and tick size for the timer
         if (interval > 0) {
             max_interval = @max(interval, max_interval);
             timer_tick = std.math.gcd(interval, timer_tick);
         }
-        var script_executor = ScriptExecutor.init(alloc, path);
-        log.debug("script path: {s}, \tinterval: {}, \tsignum: {}", .{ path, interval, signum });
-        var executor = script_executor.executor();
-        blocks[i] = Block.init(alloc, &executor, interval, signum);
+        var component_executor = if (@TypeOf(component) == type) block.CodeExecutor(component).init(alloc) else ScriptExecutor.init(alloc, component);
+        blocks[i] = Block.init(alloc, component_executor.executor(), interval, i + 1);
+        log.debug("component name: {s}, \tinterval: {}, \tsignum: {}", .{ name, interval, blocks[i].signum });
     }
     defer for (&blocks) |*b| b.deinit();
     log.debug("max_interval: {}, timer_tick: {}", .{ max_interval, timer_tick });

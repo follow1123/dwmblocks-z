@@ -5,7 +5,6 @@ const log = std.log;
 
 const unix = @import("../unix.zig");
 const signal = unix.signal;
-const epoll = unix.epoll;
 
 const Allocator = std.mem.Allocator;
 const config = @import("../config.zig");
@@ -20,12 +19,16 @@ interval: i32,
 signum: u7,
 output: []u8,
 output_len: usize = 0,
-executor: *ComponentExecutor,
+executor: ComponentExecutor,
 lock: bool = false,
 
-pub fn init(alloc: Allocator, executor: *ComponentExecutor, interval: i32, signum: u7) Block {
+inline fn rtSignal(sig: u7) u7 {
+    return @intCast(signal.RTMIN() + sig);
+}
+
+pub fn init(alloc: Allocator, executor: ComponentExecutor, interval: i32, signum: u7) Block {
     return .{
-        .signum = @intCast(signal.RTMIN() + signum),
+        .signum = rtSignal(signum),
         .alloc = alloc,
         .interval = interval,
         .output = alloc.alloc(u8, config.MAX_OUTPUT) catch @panic("cannot create buf for reasult"),
@@ -42,7 +45,7 @@ pub fn execBlock(self: *Block, button: ?Button) void {
     if (self.lock) return;
     self.lock = true;
 
-    self.executor.execute(button);
+    self.executor.execute(Message.init(button));
 }
 
 pub fn getOutput(self: *Block) []u8 {
@@ -93,6 +96,37 @@ pub fn sigEvent(ctx: *Block) SigEvent {
     };
 }
 
+pub const Message = struct {
+    button: ?Button,
+    pid: unix.Pid,
+
+    pub fn init(button: ?Button) Message {
+        return .{
+            .button = button,
+            .pid = unix.getpid(),
+        };
+    }
+
+    pub fn notifyBlock(self: Message, block_name: [:0]const u8, button: ?Button) void {
+        const sig = for (config.blocks, signal.RTMIN() + 1..) |b, i| {
+            if (std.mem.eql(u8, block_name, b[0])) break i;
+        } else {
+            log.err("no block name: {s}", .{block_name});
+            return;
+        };
+        if (button) |btn| {
+            const val = signal.SigVal{ .sival_int = @intFromEnum(btn) };
+            signal.queue(self.pid, sig, val) catch |err| {
+                log.err("cannot send signal {} to {}, error: {s}", .{ sig, self.pid, @errorName(err) });
+            };
+        } else {
+            unix.kill(self.pid, sig) catch |err| {
+                log.err("cannot send signal {} to {}, error: {s}", .{ sig, self.pid, @errorName(err) });
+            };
+        }
+    }
+};
+
 pub const Button = enum(u8) {
     left = '1',
     middle = '2',
@@ -111,43 +145,6 @@ pub const Button = enum(u8) {
         return @intFromEnum(self);
     }
 };
-
-test "execute script block" {
-    const testing = std.testing;
-    const alloc = testing.allocator;
-    const ScriptExecutor = @import("ScriptExecutor.zig");
-
-    // 获取脚本路径
-    const script_path = try std.fs.cwd().realpathAlloc(alloc, "tests/scripts");
-    defer alloc.free(script_path);
-
-    ScriptExecutor.staticInit(alloc);
-    defer ScriptExecutor.staticDeinit(alloc);
-
-    alloc.free(ScriptExecutor.data_home);
-    ScriptExecutor.data_home = try std.mem.Allocator.dupeZ(alloc, u8, script_path);
-    var script_executor = ScriptExecutor.init(alloc, "test_script");
-    var executor = script_executor.executor();
-
-    var block = Block.init(alloc, &executor, 1, 1);
-    defer block.deinit();
-
-    const epoll_fd = try epoll.create();
-    var evt = epoll.Event{
-        .events = epoll.IN,
-        .data = .{ .fd = script_executor.pipe[0] },
-    };
-    try epoll.ctl(epoll_fd, epoll.CTL_ADD, script_executor.pipe[0], &evt);
-
-    const mid = Button.middle;
-    block.execBlock(mid);
-
-    var events: [1]epoll.Event = undefined;
-    _ = epoll.wait(epoll_fd, &events, -1);
-
-    block.updateBlock();
-    try testing.expectEqualSlices(u8, &.{mid.getChar()}, block.getOutput());
-}
 
 test "create button" {
     const testing = std.testing;

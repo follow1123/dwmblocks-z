@@ -1,4 +1,3 @@
 #!/bin/bash
 
-# echo aaaa
-printf "$BLOCK_BUTTON"
+printf "$BLOCK_BUTTON $CALLER_PID"
