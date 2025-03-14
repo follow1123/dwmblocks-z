@@ -73,6 +73,30 @@ pub fn main() void {
     log.debug("exit", .{});
 }
 
+// 自定义 log 格式
+fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    // Stuff we can do before the lock
+    const level_txt = comptime level.asText();
+    const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+
+    // Lock so we are thread-safe
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+
+    const stderr = std.io.getStdErr().writer();
+    nosuspend stderr.print(level_txt ++ prefix ++ format ++ "\n", args) catch return;
+}
+
+// 覆盖自定义 log 方法
+pub const std_options: std.Options = .{
+    .logFn = logFn,
+};
+
 test "app test" {
     _ = BarStatus;
     _ = Timer;

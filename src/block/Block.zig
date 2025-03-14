@@ -1,7 +1,7 @@
 const Block = @This();
 
 const std = @import("std");
-const log = std.log;
+const log = std.log.scoped(.block);
 
 const unix = @import("../unix.zig");
 const signal = unix.signal;

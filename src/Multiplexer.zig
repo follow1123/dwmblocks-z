@@ -1,7 +1,7 @@
 const Multiplexer = @This();
 
 const std = @import("std");
-const log = std.log;
+const log = std.log.scoped(.multiplexer);
 
 const Allocator = std.mem.Allocator;
 const unix = @import("unix.zig");

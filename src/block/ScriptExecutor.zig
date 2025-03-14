@@ -1,7 +1,7 @@
 const ScriptExecutor = @This();
 
 const std = @import("std");
-const log = std.log;
+const log = std.log.scoped(.script_executor);
 
 const unix = @import("../unix.zig");
 const signal = unix.signal;

@@ -1,7 +1,7 @@
 const Timer = @This();
 
 const std = @import("std");
-const log = std.log;
+const log = std.log.scoped(.timer);
 
 const unix = @import("unix.zig");
 const signal = unix.signal;

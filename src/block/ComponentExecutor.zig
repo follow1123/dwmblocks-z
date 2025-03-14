@@ -1,7 +1,6 @@
 const ComponentExecutor = @This();
 
 const std = @import("std");
-const log = std.log;
 
 const unix = @import("../unix.zig");
 

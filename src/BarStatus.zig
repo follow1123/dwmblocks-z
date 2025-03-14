@@ -1,7 +1,7 @@
 const BarStatus = @This();
 
 const std = @import("std");
-const log = std.log;
+const log = std.log.scoped(.bar_status);
 const Allocator = std.mem.Allocator;
 
 const unix = @import("unix.zig");

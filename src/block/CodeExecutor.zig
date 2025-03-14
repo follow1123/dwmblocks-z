@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = std.log;
+const log = std.log.scoped(.code_executor);
 
 const unix = @import("../unix.zig");
 
