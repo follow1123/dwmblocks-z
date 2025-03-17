@@ -70,13 +70,13 @@ pub fn writeStatus(self: *BarStatus) void {
 
     log.debug("{s}", .{self.current.items});
 
-    // const status = self.alloc.allocSentinel(u8, self.current.items.len, 0) catch |err| {
-    //     log.err("cannot alloc status buffer in heap, error: {s}", .{@errorName(err)});
-    //     return;
-    // };
-    // defer self.alloc.free(status);
-    // @memcpy(status, self.current.items);
-    // self.x11.setRoot(status.ptr);
+    const status = self.alloc.allocSentinel(u8, self.current.items.len, 0) catch |err| {
+        log.err("cannot alloc status buffer in heap, error: {s}", .{@errorName(err)});
+        return;
+    };
+    defer self.alloc.free(status);
+    @memcpy(status, self.current.items);
+    self.x11.setRoot(status.ptr);
 }
 
 pub fn updateAllBlocksEvent(ctx: *BarStatus) SigEvent {
