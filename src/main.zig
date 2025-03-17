@@ -35,7 +35,7 @@ pub fn main() void {
         blocks[i] = Block.init(alloc, component_executor.executor(), interval, i + 1);
         log.debug("component name: {s}, \tinterval: {}, \tsignum: {}", .{ name, interval, blocks[i].signum });
     }
-    defer for (&blocks) |*b| b.deinit();
+    defer for (blocks) |b| b.deinit();
     log.debug("max_interval: {}, timer_tick: {}", .{ max_interval, timer_tick });
     var sig_event_combinator = SigEventCombinator.init(alloc);
     defer sig_event_combinator.deinit();
@@ -46,7 +46,8 @@ pub fn main() void {
     var status = BarStatus.init(alloc, &blocks);
     defer status.deinit();
 
-    sig_event_combinator.add(status.sigEvent());
+    sig_event_combinator.add(status.updateAllBlocksEvent());
+    sig_event_combinator.add(status.showAllBlocksEvent());
 
     var trigger_event = status.triggerEvent();
     var timer = Timer.init(max_interval, timer_tick, &trigger_event);

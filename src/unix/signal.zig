@@ -17,6 +17,7 @@ pub const CHLD = posix.SIG.CHLD;
 pub const TERM = posix.SIG.TERM;
 pub const ALRM = posix.SIG.ALRM;
 pub const USR1 = posix.SIG.USR1;
+pub const USR2 = posix.SIG.USR2;
 pub const BLOCK = posix.SIG.BLOCK;
 pub const DFL = posix.SIG.DFL;
 pub const IGN = posix.SIG.IGN;

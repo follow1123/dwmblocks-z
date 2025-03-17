@@ -12,7 +12,7 @@ pub const TriggerEvent = struct {
     ptr: *anyopaque,
     onTriggerFn: *const fn (ptr: *anyopaque, time: u16) void,
 
-    pub fn onTrigger(self: TriggerEvent, time: u16) void {
+    pub inline fn onTrigger(self: TriggerEvent, time: u16) void {
         self.onTriggerFn(self.ptr, time);
     }
 };

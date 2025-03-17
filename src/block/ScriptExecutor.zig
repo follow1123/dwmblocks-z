@@ -10,8 +10,8 @@ const Allocator = std.mem.Allocator;
 const config = @import("../config.zig");
 const ComponentExecutor = @import("ComponentExecutor.zig");
 
-const Button = @import("Block.zig").Button;
-const Message = @import("Block.zig").Message;
+const Message = @import("Message.zig");
+const Button = Message.Button;
 
 alloc: Allocator,
 script: [:0]const u8,
@@ -71,6 +71,7 @@ fn setEnvMap(alloc: Allocator, env: *std.process.EnvMap, message: Message) !void
     const pid_str = try std.fmt.allocPrint(alloc, "{}", .{message.pid});
     defer alloc.free(pid_str);
     try env.put("CALLER_PID", pid_str);
+    if (message.show_all) try env.put("BLOCK_SHOW_ALL", "1");
 
     inline for (config.blocks, signal.RTMIN() + 1..) |b, i| {
         const update_block_command = try std.fmt.allocPrint(alloc, "kill -s {} {}", .{ i, message.pid });
@@ -192,7 +193,8 @@ test "script executor" {
 
     const pid = unix.getpid();
     const btn = Button.left;
-    var message = Message.init(btn);
+    var message = Message.init();
+    message.button = btn;
     script_executor.execute(message);
     var buf: [1024]u8 = undefined;
     var len = try unix.read(script_executor.pipe[0], &buf);

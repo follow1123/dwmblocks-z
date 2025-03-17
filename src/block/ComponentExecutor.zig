@@ -4,7 +4,7 @@ const std = @import("std");
 
 const unix = @import("../unix.zig");
 
-const Message = @import("Block.zig").Message;
+const Message = @import("Message.zig");
 
 ptr: *anyopaque,
 getFdFn: *const fn (ptr: *anyopaque) unix.FD,

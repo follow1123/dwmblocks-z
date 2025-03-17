@@ -5,8 +5,8 @@ const unix = @import("../unix.zig");
 
 const config = @import("../config.zig");
 const ComponentExecutor = @import("ComponentExecutor.zig");
-const Button = @import("Block.zig").Button;
-const Message = @import("Block.zig").Message;
+const Message = @import("Message.zig");
+const Button = Message.Button;
 
 const Allocator = std.mem.Allocator;
 
@@ -48,7 +48,12 @@ pub fn GenericCodeExecutor(comptime component: type) type {
                     _ = unix.write(pipe[1], "\n") catch @panic("cannot write content to fd");
                     return;
                 };
-                _ = unix.write(pipe[1], buf) catch @panic("cannot write content to fd");
+                if (buf) |b| {
+                    _ = unix.write(pipe[1], b) catch @panic("cannot write content to fd");
+                } else {
+                    log.info("component has no content to write", .{});
+                    _ = unix.write(pipe[1], "\n") catch @panic("cannot write content to fd");
+                }
             }
         }
 
@@ -94,7 +99,7 @@ test "run component code" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const test_component = struct {
-        pub fn run(a: Allocator, message: Message) ![]u8 {
+        pub fn run(a: Allocator, message: Message) !?[]u8 {
             var buf = try a.alloc(u8, 1);
             if (message.button) |btn| buf[0] = btn.getChar();
             return buf;
@@ -107,7 +112,8 @@ test "run component code" {
     defer code_executor.deinit();
 
     var btn = Button.up;
-    const message = Message.init(btn);
+    var message = Message.init();
+    message.button = btn;
 
     code_executor.run(message);
 

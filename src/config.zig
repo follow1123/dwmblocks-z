@@ -8,11 +8,9 @@ pub const blocks = .{
     // .{ "netspeed", "netspeed.sh", 1 },
     .{ "netspeed", @import("components/netspeed.zig"), 1 },
     .{ "volume", "volume.sh", 5 },
-    // "", .{ "bluetooth.sh", 15},
-    // "", .{ "battery.sh", 60},
+    // .{ "bluetooth", "bluetooth.sh", 15},
+    // .{ "battery", "battery.sh", 60 },
     .{ "battery", @import("components/battery.zig"), 60 },
-    .{ "bluetooth", "bluetooth.sh", 7 },
-    .{ "battery", "battery.sh", 7 },
     .{ "datetime", "datetime.sh", 1 },
     .{ "trayer_toggle", "trayer_toggle.sh", 0 },
 };

@@ -18,8 +18,8 @@ const BatteryStatus = enum {
 
 /// 使用 run 方法内的 allocator 分配的内存可以不用释放
 /// 调用结束后由 CodeExecutor 统一释放
-pub fn run(alloc: Allocator, message: Message) ![]u8 {
-    _ = message;
+pub fn run(alloc: Allocator, message: Message) !?[]u8 {
+    if (!message.show_all) return null;
     const capacity = try getBatteryCapacity(alloc);
     const icon_idx: u8 = @as(u8, @intCast((capacity + 9) / 10)) - 1;
     const icon = if (try getBatteryStatus(alloc) == .Charging) CHARGING_BAT_ICONS[icon_idx] else BAT_ICONS[icon_idx];

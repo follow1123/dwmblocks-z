@@ -15,11 +15,11 @@ pub const Event = struct {
     getFdFn: *const fn (ptr: *anyopaque) unix.FD,
     onTriggerFn: *const fn (ptr: *anyopaque) void,
 
-    pub fn getFd(self: Event) unix.FD {
+    pub inline fn getFd(self: Event) unix.FD {
         return self.getFdFn(self.ptr);
     }
 
-    pub fn onTrigger(self: Event) void {
+    pub inline fn onTrigger(self: Event) void {
         self.onTriggerFn(self.ptr);
     }
 };
@@ -29,11 +29,11 @@ pub const SigEvent = struct {
     getSigFn: *const fn (ptr: *anyopaque) u8,
     onSigTriggerFn: *const fn (ptr: *anyopaque, data: i32) void,
 
-    pub fn getSig(self: SigEvent) u8 {
+    pub inline fn getSig(self: SigEvent) u8 {
         return self.getSigFn(self.ptr);
     }
 
-    pub fn onSigTrigger(self: SigEvent, data: i32) void {
+    pub inline fn onSigTrigger(self: SigEvent, data: i32) void {
         self.onSigTriggerFn(self.ptr, data);
     }
 };

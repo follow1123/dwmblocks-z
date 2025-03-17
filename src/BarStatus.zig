@@ -7,13 +7,15 @@ const Allocator = std.mem.Allocator;
 const unix = @import("unix.zig");
 const signal = unix.signal;
 
-const Block = @import("block/Block.zig");
+const block = @import("block.zig");
+const Block = block.Block;
+const Message = block.Message;
 const SigEvent = @import("Multiplexer.zig").SigEvent;
 const TriggerEvent = @import("Timer.zig").TriggerEvent;
 
 alloc: Allocator,
 blocks: []Block,
-sig: u8 = signal.USR1,
+show_all_flag: bool = false,
 x11: X11,
 current: std.ArrayList(u8),
 previous: std.ArrayList(u8),
@@ -39,8 +41,8 @@ fn updateStatus(self: *BarStatus) !bool {
     try self.previous.appendSlice(self.current.items);
 
     self.current.clearRetainingCapacity();
-    for (self.blocks) |*block| {
-        const output = block.getOutput();
+    for (self.blocks) |*blk| {
+        const output = blk.getOutput();
         if (output.len == 0) continue;
         try self.current.append(' ');
         try self.current.appendSlice(output);
@@ -50,9 +52,11 @@ fn updateStatus(self: *BarStatus) !bool {
 
 pub fn execBlocks(self: *BarStatus, time: i32) void {
     log.debug("execute block by timer", .{});
-    for (self.blocks) |*block| {
-        if (time == 0 or (block.interval != 0 and @mod(time, block.interval) == 0)) {
-            block.execBlock(null);
+    for (self.blocks) |*blk| {
+        if (time == 0 or (blk.interval != 0 and @mod(time, blk.interval) == 0)) {
+            var message = Message.init();
+            message.show_all = self.show_all_flag;
+            blk.execBlock(message);
         }
     }
 }
@@ -62,10 +66,7 @@ pub fn writeStatus(self: *BarStatus) void {
         log.err("cannot update status, error: {s}", .{@errorName(err)});
         return;
     };
-    if (!updated) {
-        log.debug("nothing to update", .{});
-        return;
-    }
+    if (!updated) return;
 
     log.debug("{s}", .{self.current.items});
 
@@ -78,14 +79,34 @@ pub fn writeStatus(self: *BarStatus) void {
     // self.x11.setRoot(status.ptr);
 }
 
-pub fn sigEvent(ctx: *BarStatus) SigEvent {
+pub fn updateAllBlocksEvent(ctx: *BarStatus) SigEvent {
     const gen = struct {
-        pub fn getSig(ptr: *anyopaque) u8 {
-            const self: *BarStatus = @ptrCast(@alignCast(ptr));
-            return self.sig;
+        pub fn getSig(_: *anyopaque) u8 {
+            return signal.USR1;
         }
         pub fn onSigTrigger(ptr: *anyopaque, _: i32) void {
             const self: *BarStatus = @ptrCast(@alignCast(ptr));
+            log.debug("update all blocks", .{});
+            self.execBlocks(0);
+        }
+    };
+
+    return .{
+        .ptr = ctx,
+        .getSigFn = gen.getSig,
+        .onSigTriggerFn = gen.onSigTrigger,
+    };
+}
+
+pub fn showAllBlocksEvent(ctx: *BarStatus) SigEvent {
+    const gen = struct {
+        pub fn getSig(_: *anyopaque) u8 {
+            return signal.USR2;
+        }
+        pub fn onSigTrigger(ptr: *anyopaque, _: i32) void {
+            const self: *BarStatus = @ptrCast(@alignCast(ptr));
+            log.debug("show all blocks", .{});
+            self.show_all_flag = !self.show_all_flag;
             self.execBlocks(0);
         }
     };

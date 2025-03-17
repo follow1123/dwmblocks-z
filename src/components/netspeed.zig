@@ -20,7 +20,7 @@ pub fn deinit(alloc: Allocator) !void {
 
 /// 使用 run 方法内的 allocator 分配的内存可以不用释放
 /// 调用结束后由 CodeExecutor 统一释放
-pub fn run(alloc: Allocator, message: Message) ![]u8 {
+pub fn run(alloc: Allocator, message: Message) !?[]u8 {
     _ = message;
     const interface = try findInterfaceName(alloc);
     const rx_file_path = try std.fmt.allocPrint(alloc, "/sys/class/net/{s}/statistics/rx_bytes", .{interface});
@@ -32,12 +32,12 @@ pub fn run(alloc: Allocator, message: Message) ![]u8 {
     try saveSpeedBytes(alloc, cur_rx_bytes, cur_tx_bytes);
 
     if (speed < 1024) {
-        return std.fmt.allocPrint(alloc, "{d: >3}B/s", .{speed});
+        return try std.fmt.allocPrint(alloc, "{d: >3}B/s", .{speed});
     } else if (speed < (1024 * 1024)) {
-        return std.fmt.allocPrint(alloc, "{d: >3}K/s", .{speed / 1024});
+        return try std.fmt.allocPrint(alloc, "{d: >3}K/s", .{speed / 1024});
     } else if (speed < (1024 * 1024 * 1024)) {
-        return std.fmt.allocPrint(alloc, "{d: >3}M/s", .{speed / (1024 * 1024)});
-    } else return std.fmt.allocPrint(alloc, "{d: >3}G/s", .{speed / (1024 * 1024 * 1024)});
+        return try std.fmt.allocPrint(alloc, "{d: >3}M/s", .{speed / (1024 * 1024)});
+    } else return try std.fmt.allocPrint(alloc, "{d: >3}G/s", .{speed / (1024 * 1024 * 1024)});
 }
 
 fn findInterfaceName(alloc: Allocator) ![:0]const u8 {

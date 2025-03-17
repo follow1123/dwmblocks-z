@@ -5,8 +5,8 @@ pub const ComponentExecutor = @import("block/ComponentExecutor.zig");
 pub const ScriptExecutor = @import("block/ScriptExecutor.zig");
 pub const CodeExecutor = @import("block/CodeExecutor.zig").GenericCodeExecutor;
 
-pub const Button = Block.Button;
-pub const Message = Block.Message;
+pub const Message = @import("block/Message.zig");
+pub const Button = Message.Button;
 
 test {
     std.testing.refAllDecls(@This());
