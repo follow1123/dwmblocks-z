@@ -18,19 +18,17 @@ const EnvMap = std.process.EnvMap;
 
 alloc: Allocator,
 interval: i32,
+name: [:0]const u8,
 signum: u7,
 output: []u8,
 output_len: usize = 0,
 executor: ComponentExecutor,
 lock: bool = false,
 
-inline fn rtSignal(sig: u7) u7 {
-    return @intCast(signal.RTMIN() + sig);
-}
-
-pub fn init(alloc: Allocator, executor: ComponentExecutor, interval: i32, signum: u7) Block {
+pub fn init(alloc: Allocator, executor: ComponentExecutor, name: [:0]const u8, interval: i32, signum: u7) Block {
     return .{
-        .signum = rtSignal(signum),
+        .name = name,
+        .signum = @intCast(signal.RTMIN() + signum),
         .alloc = alloc,
         .interval = interval,
         .output = alloc.alloc(u8, config.MAX_OUTPUT) catch @panic("cannot create buf for reasult"),

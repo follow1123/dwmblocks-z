@@ -4,6 +4,7 @@ const log = std.log;
 const block = @import("block.zig");
 const Block = block.Block;
 const ScriptExecutor = block.ScriptExecutor;
+const Message = block.Message;
 
 const BarStatus = @import("BarStatus.zig");
 const Timer = @import("Timer.zig");
@@ -32,11 +33,12 @@ pub fn main() void {
             timer_tick = std.math.gcd(interval, timer_tick);
         }
         var component_executor = if (@TypeOf(component) == type) block.CodeExecutor(component).init(alloc) else ScriptExecutor.init(alloc, component);
-        blocks[i] = Block.init(alloc, component_executor.executor(), interval, i + 1);
+        blocks[i] = Block.init(alloc, component_executor.executor(), name, interval, i + 1);
         log.debug("component name: {s}, \tinterval: {}, \tsignum: {}", .{ name, interval, blocks[i].signum });
     }
     defer for (blocks) |b| b.deinit();
     log.debug("max_interval: {}, timer_tick: {}", .{ max_interval, timer_tick });
+    Message.blocks = &blocks;
     var sig_event_combinator = SigEventCombinator.init(alloc);
     defer sig_event_combinator.deinit();
 

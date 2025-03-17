@@ -5,8 +5,9 @@ const log = std.log.scoped(.block);
 
 const unix = @import("../unix.zig");
 const signal = unix.signal;
+const Block = @import("Block.zig");
 
-const config = @import("../config.zig");
+pub var blocks: []Block = undefined;
 
 button: ?Button = null,
 show_all: bool = false,
@@ -18,9 +19,12 @@ pub fn init() Message {
     };
 }
 
+/// 更新指定 name 的Blcok
+/// blocks 属性必须初始化
+/// 用于代码编写的 component
 pub fn notifyBlock(self: Message, block_name: [:0]const u8, button: ?Button) void {
-    const sig = for (config.blocks, signal.RTMIN() + 1..) |b, i| {
-        if (std.mem.eql(u8, block_name, b[0])) break i;
+    const sig = for (blocks) |blk| {
+        if (std.mem.eql(u8, block_name, blk.name)) break blk.signum;
     } else {
         log.err("no block name: {s}", .{block_name});
         return;
@@ -34,6 +38,18 @@ pub fn notifyBlock(self: Message, block_name: [:0]const u8, button: ?Button) voi
         unix.kill(self.pid, sig) catch |err| {
             log.err("cannot send signal {} to {}, error: {s}", .{ sig, self.pid, @errorName(err) });
         };
+    }
+}
+
+/// 生成更新脚本存入环境变量内方便在脚本内调用
+/// 用于脚本编写的 component
+pub fn generateNotifyCommand(self: Message, alloc: std.mem.Allocator, env: *std.process.EnvMap) !void {
+    for (blocks) |blk| {
+        const key = try std.fmt.allocPrint(alloc, "update_block_{s}", .{blk.name});
+        defer alloc.free(key);
+        const command = try std.fmt.allocPrint(alloc, "kill -{} {}", .{ blk.signum, self.pid });
+        defer alloc.free(command);
+        try env.put(key, command);
     }
 }
 

@@ -72,13 +72,8 @@ fn setEnvMap(alloc: Allocator, env: *std.process.EnvMap, message: Message) !void
     defer alloc.free(pid_str);
     try env.put("CALLER_PID", pid_str);
     if (message.show_all) try env.put("BLOCK_SHOW_ALL", "1");
-
-    inline for (config.blocks, signal.RTMIN() + 1..) |b, i| {
-        const update_block_command = try std.fmt.allocPrint(alloc, "kill -s {} {}", .{ i, message.pid });
-        defer alloc.free(update_block_command);
-        try env.put("update_block_" ++ b[0], update_block_command);
-    }
     if (message.button) |btn| try env.put("BLOCK_BUTTON", &.{btn.getChar()});
+    try message.generateNotifyCommand(alloc, env);
 }
 
 fn exec(alloc: Allocator, pipe: [2]unix.FD, script: [:0]const u8, env: *std.process.EnvMap) !void {
